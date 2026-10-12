@@ -1,0 +1,9 @@
+app/lock/MemoryLifecycleIntegrationTest.class
+app/lock/crypto/AesGcmTest.class
+app/lock/support/IntegrationTest$ClockConfig.class
+app/lock/support/TestPostgres.class
+app/lock/LocalDevApplication.class
+app/lock/support/IntegrationTest$TestUser.class
+app/lock/support/IntegrationTest.class
+app/lock/support/MutableClock.class
+app/lock/VaultAndAuthIntegrationTest.class

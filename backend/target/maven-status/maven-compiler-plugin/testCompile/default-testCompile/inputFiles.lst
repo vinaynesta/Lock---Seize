@@ -1,0 +1,7 @@
+/Users/vdannina/vinay/Lock---Seize/backend/src/test/java/app/lock/LocalDevApplication.java
+/Users/vdannina/vinay/Lock---Seize/backend/src/test/java/app/lock/MemoryLifecycleIntegrationTest.java
+/Users/vdannina/vinay/Lock---Seize/backend/src/test/java/app/lock/VaultAndAuthIntegrationTest.java
+/Users/vdannina/vinay/Lock---Seize/backend/src/test/java/app/lock/crypto/AesGcmTest.java
+/Users/vdannina/vinay/Lock---Seize/backend/src/test/java/app/lock/support/IntegrationTest.java
+/Users/vdannina/vinay/Lock---Seize/backend/src/test/java/app/lock/support/MutableClock.java
+/Users/vdannina/vinay/Lock---Seize/backend/src/test/java/app/lock/support/TestPostgres.java

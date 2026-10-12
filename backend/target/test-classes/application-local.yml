@@ -1,0 +1,5 @@
+lock:
+  storage:
+    type: memory
+  memory:
+    cooling-off: PT2M # short so the lock flow can be tried end to end
