@@ -38,7 +38,8 @@ lock:
     # Dev-only default. Production must set LOCK_JWT_SECRET (>= 32 bytes, base64).
     secret: ${LOCK_JWT_SECRET:ZGV2LW9ubHktand0LXNlY3JldC1jaGFuZ2UtbWUtcGxlYXNlLTEyMzQ1Ng==}
     issuer: lock
-    ttl: PT1H
+    ttl: PT15M          # access token; clients renew it with the refresh token
+    refresh-ttl: P30D   # sliding: every refresh issues a new token valid this long
   crypto:
     # Dev-only key-encryption key (base64, 32 bytes). Production: replace LocalKeyEncryptionService with KMS.
     master-key: ${LOCK_MASTER_KEY:U41EknbduMk8SqoWrNBc3ZvWCZ2xTS/5+K8C9tmG4Sw=}

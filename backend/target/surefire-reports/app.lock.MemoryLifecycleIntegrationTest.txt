@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: app.lock.MemoryLifecycleIntegrationTest
 -------------------------------------------------------------------------------
-Tests run: 12, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 8.387 s -- in app.lock.MemoryLifecycleIntegrationTest
+Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 5.359 s -- in app.lock.MemoryLifecycleIntegrationTest

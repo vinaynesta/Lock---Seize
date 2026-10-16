@@ -1,26 +1,36 @@
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
-const KEY = 'lock.accessToken';
+import type { Tokens } from '@/api/client';
+
+const KEY = 'lock.session';
 
 /**
- * Access token persistence. Keychain/Keystore on device. SecureStore is unavailable on web, so the
- * web build keeps the token in sessionStorage (cleared when the tab closes).
+ * Session token persistence (access + refresh token). Keychain/Keystore on device. SecureStore is
+ * unavailable on web, so the web build keeps them in sessionStorage (cleared when the tab closes).
  */
 export const tokenStore = {
-  async get(): Promise<string | null> {
-    if (Platform.OS === 'web') {
-      return globalThis.sessionStorage?.getItem(KEY) ?? null;
+  async get(): Promise<Tokens | null> {
+    const raw =
+      Platform.OS === 'web' ? (globalThis.sessionStorage?.getItem(KEY) ?? null) : await SecureStore.getItemAsync(KEY);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as Partial<Tokens>;
+      return parsed.accessToken && parsed.refreshToken
+        ? { accessToken: parsed.accessToken, refreshToken: parsed.refreshToken }
+        : null;
+    } catch {
+      return null;
     }
-    return SecureStore.getItemAsync(KEY);
   },
 
-  async set(token: string): Promise<void> {
+  async set(tokens: Tokens): Promise<void> {
+    const raw = JSON.stringify(tokens);
     if (Platform.OS === 'web') {
-      globalThis.sessionStorage?.setItem(KEY, token);
+      globalThis.sessionStorage?.setItem(KEY, raw);
       return;
     }
-    await SecureStore.setItemAsync(KEY, token);
+    await SecureStore.setItemAsync(KEY, raw);
   },
 
   async clear(): Promise<void> {

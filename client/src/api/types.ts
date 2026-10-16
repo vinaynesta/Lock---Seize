@@ -12,6 +12,8 @@ export interface TokenResponse {
   accessToken: string;
   tokenType: 'Bearer';
   expiresAt: string;
+  refreshToken: string;
+  refreshExpiresAt: string;
 }
 
 export interface Me {

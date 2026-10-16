@@ -3,6 +3,8 @@ package app.lock.audit;
 public enum AuditEventType {
     USER_REGISTERED,
     PASSWORD_CHANGED,
+    LOGGED_OUT,
+    REFRESH_TOKEN_REUSED,
     VAULT_CREATED,
     MEMBER_INVITED,
     MEMBER_JOINED,

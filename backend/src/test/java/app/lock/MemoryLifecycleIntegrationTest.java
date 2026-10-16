@@ -286,6 +286,27 @@ class MemoryLifecycleIntegrationTest extends IntegrationTest {
         assertThat(storage.exists(key)).isFalse();
     }
 
+    @Test
+    void exportIncludesEveryMemoryBeyondOnePage() throws Exception {
+        TestUser erin = register("Erin");
+        String vaultId = personalVault(erin);
+        int total = 230; // more than one export page (200)
+        for (int i = 0; i < total; i++) {
+            // Pairs share an occurredAt, so the (occurredAt, id) cursor tiebreak is exercised too.
+            String body = """
+                    {"title":"Memory %d","occurredAt":"%s"}""".formatted(i, START.minus(Duration.ofDays(i / 2)));
+            mvc.perform(json(post("/vaults/" + vaultId + "/memories"), body).with(erin.auth()))
+                    .andExpect(status().isCreated());
+        }
+
+        String export = mvc.perform(get("/vaults/" + vaultId + "/export").with(erin.auth()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        java.util.List<String> ids = com.jayway.jsonpath.JsonPath.read(export, "$.memories[*].memory.id");
+        assertThat(ids).hasSize(total).doesNotHaveDuplicates();
+    }
+
     // ---- helpers ----
 
     private String createMemory(TestUser user, String vaultId, String title, String revealAt) throws Exception {

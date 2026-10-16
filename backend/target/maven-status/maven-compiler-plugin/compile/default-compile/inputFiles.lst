@@ -15,6 +15,9 @@
 /Users/vdannina/vinay/Lock---Seize/backend/src/main/java/app/lock/crypto/LocalKeyEncryptionService.java
 /Users/vdannina/vinay/Lock---Seize/backend/src/main/java/app/lock/identity/AuthController.java
 /Users/vdannina/vinay/Lock---Seize/backend/src/main/java/app/lock/identity/IdentityService.java
+/Users/vdannina/vinay/Lock---Seize/backend/src/main/java/app/lock/identity/RefreshToken.java
+/Users/vdannina/vinay/Lock---Seize/backend/src/main/java/app/lock/identity/RefreshTokenRepository.java
+/Users/vdannina/vinay/Lock---Seize/backend/src/main/java/app/lock/identity/RefreshTokenService.java
 /Users/vdannina/vinay/Lock---Seize/backend/src/main/java/app/lock/identity/TokenService.java
 /Users/vdannina/vinay/Lock---Seize/backend/src/main/java/app/lock/identity/User.java
 /Users/vdannina/vinay/Lock---Seize/backend/src/main/java/app/lock/identity/UserCreatedEvent.java

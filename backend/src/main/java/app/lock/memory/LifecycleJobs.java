@@ -1,5 +1,6 @@
 package app.lock.memory;
 
+import app.lock.identity.RefreshTokenService;
 import app.lock.media.MediaService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,10 +19,12 @@ class LifecycleJobs {
 
     private final MemoryService memories;
     private final MediaService media;
+    private final RefreshTokenService refreshTokens;
 
-    LifecycleJobs(MemoryService memories, MediaService media) {
+    LifecycleJobs(MemoryService memories, MediaService media, RefreshTokenService refreshTokens) {
         this.memories = memories;
         this.media = media;
+        this.refreshTokens = refreshTokens;
     }
 
     @Scheduled(fixedDelayString = "PT1M")
@@ -45,6 +48,14 @@ class LifecycleJobs {
         int n = media.expireStaleUploads(BATCH);
         if (n > 0) {
             log.info("Expired {} abandoned uploads", n);
+        }
+    }
+
+    @Scheduled(fixedDelayString = "PT6H")
+    void deleteExpiredRefreshTokens() {
+        int n = refreshTokens.deleteExpired();
+        if (n > 0) {
+            log.info("Deleted {} expired refresh tokens", n);
         }
     }
 }

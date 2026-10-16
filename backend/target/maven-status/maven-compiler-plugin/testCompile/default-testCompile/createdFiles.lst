@@ -1,4 +1,5 @@
 app/lock/MemoryLifecycleIntegrationTest.class
+app/lock/RefreshTokenIntegrationTest.class
 app/lock/crypto/AesGcmTest.class
 app/lock/support/IntegrationTest$ClockConfig.class
 app/lock/support/TestPostgres.class
