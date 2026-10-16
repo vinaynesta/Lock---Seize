@@ -1,0 +1,259 @@
+1. Technical feasibility
+
+  Verdict: yes. Nothing in this design needs new technology.
+
+  - Proven building blocks. PostgreSQL, S3-style object storage, Spring Boot, signed-URL uploads and queues are all mature and well understood.
+  - Immutability is easy to enforce. A state machine, DB constraints (for example a trigger that rejects UPDATE/DELETE on locked rows) and S3 Object Lock in compliance mode together give real protection, not just a hidden button.
+  - Media handling is a solved problem. Thumbnails, transcoding and direct uploads can use FFmpeg or managed services (MediaConvert, Cloudflare Stream, Mux).
+  - Key hierarchy is a standard pattern. Envelope encryption with KMS covers the credential → vault key → asset key chain.
+  - The MVP is small. A team of 2–3 engineers could ship personal vaults, photo upload, lock, timeline and Relive in roughly 3–4 months.
+  - The hard part is true end-to-end encryption.
+    - It blocks server-side thumbnails, search, malware scanning and AI features.
+    - Key recovery and multi-device support get much harder.
+    - Shared-vault key rotation is complex. Signal and WhatsApp spent years on this.
+    - Recommendation: launch with server-side encryption using KMS-managed keys, and offer an E2E "Sealed Vault" later as a premium tier.
+  - Long-term durability is an operations problem, not a code problem. It needs cross-region replication, periodic checksum audits and tested restores.
+
+  ---
+
+  2. Financial viability
+
+  Verdict: it can make money, but only if pricing covers storage that never goes away.
+
+  What it costs (approximate public list prices; check current rates)
+
+  - Storage per GB per month:
+    - S3 Standard: about $0.023
+    - S3 Glacier Instant Retrieval: about $0.004
+    - Glacier Deep Archive: about $0.001
+    - Cloudflare R2: about $0.015, with no egress fees
+    - Backblaze B2: about $0.006
+  - Example user: 10 GB of locked memories, with a backup copy, on tiered storage costs about $0.10–0.50 per month. If it all sits in S3 Standard with no tiering, it costs about $0.50–1.00.
+  - Video is the main cost. One minute of 4K is about 350 MB. Heavy video users can cost 10–50× more than photo users.
+  - Data never shrinks. Because nothing gets deleted, the cost per user only goes up each year, even for users who stop paying.
+  - Other costs:
+    - Egress bandwidth, especially video playback
+    - Transcoding
+    - App store fees of 15–30%
+    - Support
+
+  How to make money
+
+  - Freemium: a free tier (for example 2–5 GB, photos only, a few vaults), then paid tiers.
+  - Subscription: around $3–5/month or $30–50/year for more storage, video, shared vaults and HD Relive.
+  - Family or couple plan: around $6–10/month. Shared vaults fit this naturally.
+  - "Forever" plan priced as an endowment:
+    - A one-time payment, for example $150–300 for a fixed number of GB, invested to cover storage costs indefinitely. Permanent.org uses this model.
+    - It matches the brand promise. Price it carefully, because it is a long-term liability.
+  - Physical products:
+    - Yearly printed "Locked Memories" books, photo prints, keepsake boxes
+    - Margins are good, and Chatbooks and Storyworth show that people buy these
+  - Gifting:
+    - Gift a vault or time capsule for a wedding, birth, graduation or anniversary
+    - These are high-emotion moments when people are willing to pay
+  - Legacy and digital inheritance: paid add-on that hands vaults to chosen people after death.
+  - B2B or event vaults: weddings, schools, hospices and memorial services, where one buyer pays and many people contribute.
+  - What not to do:
+    - Ads. They conflict with the privacy promise.
+    - Data monetization. It would destroy trust.
+
+  Economics sanity check
+
+  - At $4/month, after store fees and about $0.50 of infrastructure, gross margin is roughly 70%. That is healthy.
+  - Free users are where you lose money, so cap free storage strictly.
+  - Archive inactive or old media to cold tiers automatically to keep costs flat.
+
+  ---
+
+  3. Blockers and issues
+
+  Legal and regulatory (the biggest risks)
+
+  - "Cannot delete" vs privacy law.
+    - GDPR Article 17 (right to erasure), CCPA/CPRA and India's DPDP Act 2023 all give users a right to delete their data.
+    - A promise that data can never be deleted is likely illegal in many markets.
+    - Frame the promise as "protected from casual or accidental deletion", not "impossible to delete".
+  - Illegal content (CSAM, revenge porn, copyright).
+    - You must be able to remove it, and in the US report it to NCMEC.
+    - Immutable storage combined with E2E encryption makes this very hard, which creates legal and app-store risk.
+    - You need an administrative removal path. S3 Object Lock in compliance mode would block even that, so use governance mode or an equivalent design.
+  - Law-enforcement requests and data residency need a policy before launch.
+  - Shared-vault consent. In a shared vault, User B's face or words get locked by User A, so B's privacy rights still apply.
+
+  Product and human issues
+
+  - Regret. People lock photos of an ex, or something written in anger. Permanence without a way out creates distress and support tickets.
+  - Breakups in shared vaults. When a couple separates, who keeps the vault, and can one person leave without the other being able to see their memories?
+  - Coercion and abuse. An abusive partner could use a shared vault to keep material "permanently".
+  - Infrequent use.
+    - People lock meaningful moments maybe a few times a month, so daily engagement is naturally low.
+    - That threatens retention, and with it subscription revenue.
+  - The permanence promise depends on the company.
+    - If the startup shuts down, the memories are gone.
+    - Users will ask about this, and you need an answer: export, an escrow or shutdown plan, open formats.
+
+  Market issues
+
+  - Strong competition:
+    - Google Photos and Apple Photos are free, preinstalled, and have "Memories" features.
+    - Day One is the leading journal app.
+    - Others include 1 Second Everyday, Timehop, Storyworth and Permanent.org.
+  - Easy to copy. "Lock" is a feature, and Apple or Google could add a lock toggle quickly.
+  - Trust barrier. An unknown startup promising "forever" is a hard sell, so credibility has to be earned.
+
+  Technical and operational issues
+
+  - Key loss. With strong encryption, a lost password plus no recovery key means memories are lost permanently. That breaks the product's core promise.
+  - Storage grows forever, as do backups and restore times.
+  ---
+
+  4. Enhancements
+
+  Fix the blockers
+
+  - Cooling-off window. Locking takes effect after 24–72 hours, with an undo option. This reduces regret without weakening the promise.
+  - Append-only reflections.
+    - The original stays sealed, and the user can add dated reflections later, for example "Reading this 5 years later…".
+    - This fits the "immutable core + mutable context" principle and becomes a strong feature.
+  - Clear deletion policy. Locked memories can only be deleted through a deliberate, delayed process (for example a 30-day request with re-authentication). This keeps you legally compliant and avoids casual deletion.
+  - Breakup protocol for shared vaults.
+    - Each member keeps a personal copy of the shared memories, or the vault goes "dormant".
+    - Neither person can delete the other's contributions.
+  - Export anytime in open formats (JPEG, MP4, JSON/HTML). This builds trust and answers "what if you shut down?".
+  - Proof of preservation. Show users a checksum and an independent timestamp certificate for each locked memory: "Verified intact: 3 years, 0 changes".
+
+    - Lock something now and unlock it on a future date: a letter to your future self, or a message for your child's 18th birthday.
+    - Highly emotional, easy to gift, easy to share.
+  - Digital legacy: choose people who inherit chosen vaults after you die, a growing area people will pay for.
+  - Relive notifications: "You locked this 1 year ago today." This drives return visits without needing daily engagement.
+  - Guided prompts: for example "What did today feel like?" or "Describe this person in 3 words". These increase how often people lock memories.
+  - Voice notes: hearing your own voice from years ago is far more powerful than reading text.
+  - Import: pull favorites from Google Photos, iCloud, WhatsApp and Instagram so new users don't start with an empty app.
+  - On-device AI: summaries, mood trends and memory search without sending content to servers, which keeps the privacy promise.
+  - Collaborative event vaults: wedding guests or trip friends all contribute, and the result is locked as one shared memory capsule. This also brings in new users.
+  - Yearly recap: a "Your Locked Year" film or book, which also feeds print sales.
+
+  Growth
+
+  - Gift-led growth: send a time capsule, and the recipient has to install the app.
+    - Frame the promise as "protected from casual or accidental deletion", not "impossible
+      to delete".
+  - Illegal content (CSAM, revenge porn, copyright).
+    - You must be able to remove it, and in the US report it to NCMEC.
+    - Immutable storage combined with E2E encryption makes this very hard, which creates
+      legal and app-store risk.
+    - You need an administrative removal path. S3 Object Lock in compliance mode would block
+      even that, so use governance mode or an equivalent design.
+  - Law-enforcement requests and data residency need a policy before launch.
+  - Shared-vault consent. In a shared vault, User B's face or words get locked by User A, so
+    B's privacy rights still apply.
+
+  Product and human issues
+
+  - Regret. People lock photos of an ex, or something written in anger. Permanence without a
+    way out creates distress and support tickets.
+  - Breakups in shared vaults. When a couple separates, who keeps the vault, and can one
+    person leave without the other being able to see their memories?
+  - Coercion and abuse. An abusive partner could use a shared vault to keep material
+    "permanently".
+  - Infrequent use.
+    - People lock meaningful moments maybe a few times a month, so daily engagement is
+      naturally low.
+    - That threatens retention, and with it subscription revenue.
+  - The permanence promise depends on the company.
+    - If the startup shuts down, the memories are gone.
+    - Users will ask about this, and you need an answer: export, an escrow or shutdown plan,
+      open formats.
+
+  Market issues
+
+  - Strong competition:
+    - Google Photos and Apple Photos are free, preinstalled, and have "Memories" features.
+    - Day One is the leading journal app.
+    - Others include 1 Second Everyday, Timehop, Storyworth and Permanent.org.
+  - Easy to copy. "Lock" is a feature, and Apple or Google could add a lock toggle quickly.
+  - Trust barrier. An unknown startup promising "forever" is a hard sell, so credibility has
+    to be earned.
+
+  Technical and operational issues
+
+  - Key loss. With strong encryption, a lost password plus no recovery key means memories
+    are lost permanently. That breaks the product's core promise.
+  - Storage grows forever, as do backups and restore times.
+  - Format decay. Photos and videos saved in 2026 may need migrating to new formats by 2046.
+    Plan to store originals plus open-format copies.
+  - Operations cost money. Ongoing cost of monitoring, disaster-recovery drills and
+    integrity audits.
+
+  ---
+
+  4. Enhancements
+
+  Fix the blockers
+
+  - Cooling-off window. Locking takes effect after 24–72 hours, with an undo option. This
+    reduces regret without weakening the promise.
+  - Append-only reflections.
+    - The original stays sealed, and the user can add dated reflections later, for example
+      "Reading this 5 years later…".
+    - This fits the "immutable core + mutable context" principle and becomes a strong
+      feature.
+  - Clear deletion policy. Locked memories can only be deleted through a deliberate, delayed
+    process (for example a 30-day request with re-authentication). This keeps you legally
+    compliant and avoids casual deletion.
+  - Breakup protocol for shared vaults.
+    - Each member keeps a personal copy of the shared memories, or the vault goes "dormant".
+    - Neither person can delete the other's contributions.
+  - Export anytime in open formats (JPEG, MP4, JSON/HTML). This builds trust and answers
+    "what if you shut down?".
+  - Proof of preservation. Show users a checksum and an independent timestamp certificate
+    for each locked memory: "Verified intact: 3 years, 0 changes".
+
+  Features that differentiate
+
+  - Time capsules:
+    - Lock something now and unlock it on a future date: a letter to your future self, or a
+      message for your child's 18th birthday.
+    - Highly emotional, easy to gift, easy to share.
+  - Digital legacy: choose people who inherit chosen vaults after you die, a growing area
+    people will pay for.
+  - Relive notifications: "You locked this 1 year ago today." This drives return visits
+    without needing daily engagement.
+  - Guided prompts: for example "What did today feel like?" or "Describe this person in 3
+    words". These increase how often people lock memories.
+  - Voice notes: hearing your own voice from years ago is far more powerful than reading
+    text.
+  - Import: pull favorites from Google Photos, iCloud, WhatsApp and Instagram so new users
+    don't start with an empty app.
+    - Lock something now and unlock it on a future date: a letter to your future self, or a message for your child's 18th birthday.
+    - Highly emotional, easy to gift, easy to share.
+  - Digital legacy: choose people who inherit chosen vaults after you die, a growing area people will pay for.
+  - Relive notifications: "You locked this 1 year ago today." This drives return visits without needing daily engagement.
+  - Guided prompts: for example "What did today feel like?" or "Describe this person in 3 words". These increase how often people lock memories.
+  - Voice notes: hearing your own voice from years ago is far more powerful than reading text.
+  - Import: pull favorites from Google Photos, iCloud, WhatsApp and Instagram so new users don't start with an empty app.
+  - On-device AI: summaries, mood trends and memory search without sending content to servers, which keeps the privacy promise.
+  - Collaborative event vaults: wedding guests or trip friends all contribute, and the result is locked as one shared memory capsule. This also brings in new users.
+  - Yearly recap: a "Your Locked Year" film or book, which also feeds print sales.
+
+  Growth
+
+  - Gift-led growth: send a time capsule, and the recipient has to install the app.
+  - Partnerships with wedding planners, maternity and baby brands, schools and hospices.
+  - Position as "the opposite of social media": private, permanent, meaningful.
+
+  ---
+
+  Bottom line
+
+  - Technically: feasible with a standard stack. The real decision is the encryption and recovery model.
+  - Financially: viable with subscriptions, gifting, print products and endowment pricing. Cap free storage, use cold storage tiers, and watch video costs.
+  - Main blockers:
+    - Privacy law vs "cannot delete", plus the need to remove illegal content
+    - Regret and breakups
+    - Infrequent use
+    - Competition from Google and Apple
+  - Best enhancements:
+    - Cooling-off lock and append-only reflections
+    - Time capsules and digital legacy
+    - Clear export and preservation guarantees

@@ -1,0 +1,6 @@
+lock:
+  scheduling-enabled: false
+  storage:
+    type: memory
+  memory:
+    cooling-off: PT24H

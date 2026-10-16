@@ -1,0 +1,60 @@
+# Local development infrastructure for Lock.
+#   docker compose up -d            # Postgres + MinIO
+#   docker compose --profile app up # also builds and runs the API
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: lock
+      POSTGRES_USER: lock
+      POSTGRES_PASSWORD: lock
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lock -d lock"]
+      interval: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: lock
+      MINIO_ROOT_PASSWORD: lock-secret
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [miniodata:/data]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      retries: 10
+
+  # Creates the media bucket with object lock enabled (needed for governance-mode retention).
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 lock lock-secret &&
+      mc mb --ignore-existing --with-lock local/lock-media &&
+      echo 'bucket ready'
+      "
+
+  api:
+    profiles: ["app"]
+    build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      LOCK_DB_URL: jdbc:postgresql://postgres:5432/lock
+      LOCK_S3_ENDPOINT: http://minio:9000
+      LOCK_OBJECT_LOCK_YEARS: "100"
+    ports: ["8080:8080"]
+
+volumes:
+  pgdata:
+  miniodata:
