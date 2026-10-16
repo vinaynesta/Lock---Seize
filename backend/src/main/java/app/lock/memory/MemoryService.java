@@ -229,6 +229,20 @@ public class MemoryService {
                 .stream().map(m -> toSummary(m, access)).toList();
     }
 
+    /**
+     * The next page of the whole vault in timeline order. Pass the last memory of the previous page as
+     * the cursor, or null for the first page. An empty list means the end.
+     */
+    @Transactional(readOnly = true)
+    public List<MemoryView> timelineAfter(UUID vaultId, UUID userId, MemoryView cursor, int limit) {
+        VaultAccess access = vaults.requireMember(vaultId, userId);
+        PageRequest page = PageRequest.of(0, Math.clamp(limit, 1, 200));
+        List<Memory> found = cursor == null
+                ? memories.timeline(vaultId, userId, Instant.EPOCH, Instant.parse("9999-12-31T00:00:00Z"), null, page)
+                : memories.timelineAfter(vaultId, userId, cursor.occurredAt(), cursor.id(), page);
+        return found.stream().map(m -> toSummary(m, access)).toList();
+    }
+
     public record ReliveView(MemoryView memory, long daysSinceLocked, List<ReflectionView> reflections, List<MemoryView> samePeriod) {}
 
     /** Relive is a product experience, not just a GET (design doc §34). */

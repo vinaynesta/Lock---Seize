@@ -2,6 +2,7 @@ package app.lock.memory;
 
 import app.lock.common.CurrentUser;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -18,7 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class ExportController {
 
-    private static final int EXPORT_LIMIT = 200;
+    private static final int PAGE_SIZE = 200;
 
     private final MemoryService memories;
 
@@ -29,15 +30,20 @@ public class ExportController {
     @GetMapping("/vaults/{vaultId}/export")
     public VaultExport export(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID vaultId) {
         UUID userId = CurrentUser.id(jwt);
-        List<ExportedMemory> exported = memories.timeline(vaultId, userId, null, null, null, EXPORT_LIMIT).stream()
-                .map(summary -> {
-                    MemoryView full = memories.get(summary.id(), userId);
-                    List<MemoryService.ReflectionView> refl = full.state().isLocked() && !full.sealedCapsule()
-                            ? memories.listReflections(full.id(), userId)
-                            : List.of();
-                    return new ExportedMemory(full, refl);
-                })
-                .toList();
+        // Walk the whole vault page by page: an export must never be silently truncated.
+        List<ExportedMemory> exported = new ArrayList<>();
+        MemoryView cursor = null;
+        List<MemoryView> page;
+        while (!(page = memories.timelineAfter(vaultId, userId, cursor, PAGE_SIZE)).isEmpty()) {
+            for (MemoryView summary : page) {
+                MemoryView full = memories.get(summary.id(), userId);
+                List<MemoryService.ReflectionView> refl = full.state().isLocked() && !full.sealedCapsule()
+                        ? memories.listReflections(full.id(), userId)
+                        : List.of();
+                exported.add(new ExportedMemory(full, refl));
+            }
+            cursor = page.getLast();
+        }
         return new VaultExport("lock-export/v1", vaultId, Instant.now(), exported);
     }
 

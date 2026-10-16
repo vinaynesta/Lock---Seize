@@ -55,6 +55,6 @@ swap later.
 - Recovery model for when the Sealed Vault (E2E) tier arrives.
 - Vault-key rotation on member removal.
 - Media processing workers: thumbnails, transcoding, malware scanning (plug into the outbox).
-- Refresh tokens, MFA, rate limiting.
+- MFA, rate limiting. (Refresh tokens are done: 15-minute access tokens plus rotating 30-day refresh tokens with reuse detection; see `docs/roadmap.md` 1.1.)
 - Storage limits per plan, cold-tier archival.
 - Scheduler locking (ShedLock) once there is more than one instance.

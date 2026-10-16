@@ -9,12 +9,12 @@ import { useSession } from '@/lib/session';
 import { space } from '@/theme';
 
 export default function Settings() {
-  const { signOut } = useSession();
+  const { signOut, changePassword } = useSession();
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const change = useMutation({
-    mutationFn: () => api.changePassword(current, next),
+    mutationFn: () => changePassword(current, next),
     onSuccess: () => {
       setCurrent('');
       setNext('');

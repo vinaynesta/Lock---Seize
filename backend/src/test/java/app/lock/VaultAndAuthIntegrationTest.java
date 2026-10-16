@@ -74,7 +74,7 @@ class VaultAndAuthIntegrationTest extends IntegrationTest {
         mvc.perform(json(post("/auth/change-password"), """
                         {"currentPassword":"%s","newPassword":"a-brand-new-password"}""".formatted(alice.password()))
                         .with(alice.auth()))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk());
 
         mvc.perform(get("/memories/" + memoryId).with(alice.auth()))
                 .andExpect(jsonPath("$.title").value("Still readable"));

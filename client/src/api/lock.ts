@@ -25,8 +25,10 @@ export const api = {
   login: (email: string, password: string) =>
     request<TokenResponse>('POST', '/auth/login', { email, password }),
   me: () => request<Me>('GET', '/auth/me'),
+  logout: (refreshToken: string) => request<void>('POST', '/auth/logout', { refreshToken }),
+  /** Signs out every other device and returns a new session for this one. */
   changePassword: (currentPassword: string, newPassword: string) =>
-    request<void>('POST', '/auth/change-password', { currentPassword, newPassword }),
+    request<TokenResponse>('POST', '/auth/change-password', { currentPassword, newPassword }),
 
   // Vaults
   vaults: () => request<Vault[]>('GET', '/vaults'),

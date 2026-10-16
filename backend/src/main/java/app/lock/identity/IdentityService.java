@@ -18,15 +18,17 @@ public class IdentityService {
     private final UserRepository users;
     private final PasswordEncoder passwordEncoder;
     private final TokenService tokens;
+    private final RefreshTokenService refreshTokens;
     private final AuditService audit;
     private final ApplicationEventPublisher events;
     private final Clock clock;
 
     public IdentityService(UserRepository users, PasswordEncoder passwordEncoder, TokenService tokens,
-                           AuditService audit, ApplicationEventPublisher events, Clock clock) {
+                           RefreshTokenService refreshTokens, AuditService audit, ApplicationEventPublisher events, Clock clock) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.tokens = tokens;
+        this.refreshTokens = refreshTokens;
         this.audit = audit;
         this.events = events;
         this.clock = clock;
@@ -44,27 +46,46 @@ public class IdentityService {
         return user;
     }
 
-    @Transactional(readOnly = true)
-    public TokenService.IssuedToken login(String email, String password) {
+    @Transactional
+    public Session login(String email, String password) {
         User user = users.findByEmailIgnoreCase(email.trim())
                 .filter(u -> u.getStatus() == User.Status.ACTIVE)
                 .filter(u -> passwordEncoder.matches(password, u.getPasswordHash()))
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Invalid email or password"));
-        return tokens.issue(user);
+        return new Session(tokens.issue(user), refreshTokens.start(user.getId()));
     }
+
+    /** Exchanges a refresh token for a new access token and a rotated refresh token. */
+    @Transactional(noRollbackFor = ApiException.class) // a detected reuse must stay revoked
+    public Session refresh(String refreshToken) {
+        RefreshTokenService.Rotation rotation = refreshTokens.rotate(refreshToken);
+        User user = users.findById(rotation.userId())
+                .filter(u -> u.getStatus() == User.Status.ACTIVE)
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_REFRESH_TOKEN", "Refresh token is invalid or expired"));
+        return new Session(tokens.issue(user), rotation.refreshToken());
+    }
+
+    public void logout(String refreshToken) {
+        refreshTokens.revoke(refreshToken);
+    }
+
+    public record Session(TokenService.IssuedToken accessToken, RefreshTokenService.IssuedRefreshToken refreshToken) {}
 
     /**
      * Password changes touch only the credential. Vault data keys are wrapped by the KEK, not by
-     * the password, so no memory content is re-encrypted (invariant 4).
+     * the password, so no memory content is re-encrypted (invariant 4). Every existing session is
+     * revoked; the caller gets a new one so the device that made the change stays signed in.
      */
     @Transactional
-    public void changePassword(UUID userId, String currentPassword, String newPassword) {
+    public Session changePassword(UUID userId, String currentPassword, String newPassword) {
         User user = get(userId);
         if (!passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Current password is incorrect");
         }
         user.changePasswordHash(passwordEncoder.encode(newPassword), Instant.now(clock));
+        refreshTokens.revokeAll(userId);
         audit.record(AuditEventType.PASSWORD_CHANGED, userId, null, null);
+        return new Session(tokens.issue(user), refreshTokens.start(userId));
     }
 
     /** Re-authentication for sensitive operations such as deletion requests. */

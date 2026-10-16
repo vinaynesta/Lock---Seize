@@ -30,6 +30,16 @@ public interface MemoryRepository extends JpaRepository<Memory, UUID> {
             """)
     List<Memory> timeline(UUID vaultId, UUID viewerId, Instant from, Instant to, MemoryState state, Pageable page);
 
+    /** Keyset page in timeline order, strictly after the (occurredAt, id) cursor. Used to walk a whole vault. */
+    @Query("""
+            select m from Memory m
+            where m.vaultId = :vaultId
+              and (m.occurredAt < :afterOccurredAt or (m.occurredAt = :afterOccurredAt and m.id < :afterId))
+              and (m.state <> app.lock.memory.MemoryState.DRAFT or m.createdBy = :viewerId)
+            order by m.occurredAt desc, m.id desc
+            """)
+    List<Memory> timelineAfter(UUID vaultId, UUID viewerId, Instant afterOccurredAt, UUID afterId, Pageable page);
+
     @Query("select m from Memory m where m.state = app.lock.memory.MemoryState.SEALING and m.sealingUntil <= :now")
     List<Memory> findSealingDue(Instant now, Pageable page);
 

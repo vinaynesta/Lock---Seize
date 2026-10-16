@@ -39,10 +39,23 @@ public class AuthController {
         return TokenResponse.of(identity.login(req.email(), req.password()));
     }
 
-    @PostMapping("/change-password")
+    /** Rotates the refresh token: the old one stops working and a new pair is returned. */
+    @PostMapping("/refresh")
+    public TokenResponse refresh(@Valid @RequestBody RefreshRequest req) {
+        return TokenResponse.of(identity.refresh(req.refreshToken()));
+    }
+
+    /** Revokes the refresh token's family. Unauthenticated so an expired access token can still log out. */
+    @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void changePassword(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody ChangePasswordRequest req) {
-        identity.changePassword(CurrentUser.id(jwt), req.currentPassword(), req.newPassword());
+    public void logout(@Valid @RequestBody RefreshRequest req) {
+        identity.logout(req.refreshToken());
+    }
+
+    /** Signs out every other session and returns a new one for this device. */
+    @PostMapping("/change-password")
+    public TokenResponse changePassword(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody ChangePasswordRequest req) {
+        return TokenResponse.of(identity.changePassword(CurrentUser.id(jwt), req.currentPassword(), req.newPassword()));
     }
 
     @GetMapping("/me")
@@ -58,13 +71,17 @@ public class AuthController {
 
     public record LoginRequest(@NotBlank String email, @NotBlank String password) {}
 
+    public record RefreshRequest(@NotBlank @Size(max = 200) String refreshToken) {}
+
     public record ChangePasswordRequest(
             @NotBlank String currentPassword,
             @NotBlank @Size(min = 10, max = 128) String newPassword) {}
 
-    public record TokenResponse(String accessToken, String tokenType, Instant expiresAt) {
-        static TokenResponse of(TokenService.IssuedToken token) {
-            return new TokenResponse(token.value(), "Bearer", token.expiresAt());
+    public record TokenResponse(String accessToken, String tokenType, Instant expiresAt,
+                                String refreshToken, Instant refreshExpiresAt) {
+        static TokenResponse of(IdentityService.Session session) {
+            return new TokenResponse(session.accessToken().value(), "Bearer", session.accessToken().expiresAt(),
+                    session.refreshToken().value(), session.refreshToken().expiresAt());
         }
     }
 

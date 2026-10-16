@@ -12,7 +12,8 @@ public record LockProperties(
         Memory memory,
         Storage storage) {
 
-    public record Jwt(String secret, String issuer, Duration ttl) {}
+    /** {@code ttl} is the access-token lifetime; {@code refreshTtl} the sliding refresh-token lifetime. */
+    public record Jwt(String secret, String issuer, Duration ttl, Duration refreshTtl) {}
 
     public record Crypto(String masterKey) {}
 
