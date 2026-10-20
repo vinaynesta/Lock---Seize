@@ -53,11 +53,11 @@ _Last reviewed: 2026-10-17_
 | 0.1 | Repo hygiene: untrack `target/`, restore `application.yml` | P0 | XS | — | ✅ |
 | 0.2 | CI pipeline (backend tests + client checks) | P0 | S | 0.1 | ✅ |
 | 1.1 | Refresh tokens with rotation | P1 | M | 0.2 | ✅ |
-| 1.2 | Rate limiting and login lockout | P1 | S | — | ☐ |
-| 1.3 | Scheduler locking (ShedLock) | P1 | S | — | ☐ |
-| 1.4 | Production key management (KMS for the KEK) | P1 | M | — | ☐ |
-| 1.5 | Observability baseline | P1 | S | — | ☐ |
-| 1.6 | Timeline pagination (cursor) and an export without the 200 cap | P1 | S | — | ◐ export done |
+| 1.2 | Rate limiting and login lockout | P1 | S | — | ✅ |
+| 1.3 | Scheduler locking (ShedLock) | P1 | S | — | ✅ |
+| 1.4 | Production key management (KMS for the KEK) | P1 | M | — | ✅ |
+| 1.5 | Observability baseline | P1 | S | — | ✅ |
+| 1.6 | Timeline pagination (cursor) and an export without the 200 cap | P1 | S | — | ✅ |
 | 2.1 | Media processing worker: thumbnails | P2 | L | 1.3 | ☐ |
 | 2.2 | Malware scanning of uploads | P2 | M | 2.1 | ☐ |
 | 2.3 | Full ZIP export with original media | P2 | M | 1.6, 2.1 worker seam | ☐ |
@@ -136,6 +136,16 @@ _Last reviewed: 2026-10-17_
 
 **Done when.** A test shows the 6th failed login inside a minute returns 429.
 
+> ✅ Done 2026-10-17, without Bucket4j: Maven Central could not be reached from the dev machine (TLS/PKIX), so it uses a small in-memory sliding window (`security/RateLimiter`). As built:
+> - `AuthRateLimitFilter` allows 20 requests per minute per IP per `/auth` endpoint.
+> - `LoginAttemptGuard` locks an account for 15 minutes after 5 wrong passwords, from any IP. It counts unknown emails too, so the lockout doesn't reveal which accounts exist. Change-password and deletion re-auth share their own per-user counter.
+> - Over the limit returns 429 with `Retry-After`. Limits are configurable under `lock.rate-limit`.
+>
+> Known limits:
+> - Counts are per instance. Move them to Redis before running several instances.
+> - Anyone can lock out a known email for 15 minutes (the standard trade-off). Revisit with CAPTCHA or MFA.
+> - Behind a load balancer, set `LOCK_FORWARD_HEADERS=framework`, or every client will share the balancer's IP.
+
 ### 1.3 Scheduler locking (ShedLock) · S
 **Why.** `LifecycleJobs` (seal, purge, expire uploads) and `OutboxDispatcher` run `@Scheduled` on every instance. With two instances, jobs run twice: double purges, double event dispatch.
 
@@ -144,6 +154,8 @@ _Last reviewed: 2026-10-17_
 - The outbox dispatcher can use `SELECT … FOR UPDATE SKIP LOCKED` instead, so it can scale out. Pick one approach and document it in `decisions.md`.
 
 **Done when.** A test with two dispatcher beans processes each event exactly once.
+
+> ✅ Done 2026-10-17 with `FOR UPDATE SKIP LOCKED` instead of ShedLock, so there is no new dependency and instances share the work instead of one sitting idle. The outbox already used it. Seal, purge and upload-expiry now claim their batches the same way. `ConcurrentJobsIntegrationTest` runs 4 concurrent seal jobs over 40 memories and checks exactly 40 locks and 40 audit events. It fails if `SKIP LOCKED` is removed. The refresh-token cleanup is a single idempotent `DELETE`, so it needs no claim.
 
 ### 1.4 Production key management · M
 **Why.** The KEK is a config value (`LOCK_MASTER_KEY`). `decisions.md` says to replace it before production.
@@ -155,6 +167,13 @@ _Last reviewed: 2026-10-17_
 
 **Done when.** Integration test with a fake KMS. The prod profile refuses to start with dev defaults.
 
+> ✅ Done 2026-10-17.
+> - **Prod guard:** `ProductionSecretsGuard` (profile `prod`) refuses to boot while `LOCK_JWT_SECRET`, `LOCK_S3_SECRET_KEY` or, with a local KEK, `LOCK_MASTER_KEY` still has its dev default.
+> - **KMS:** `AwsKmsKeyEncryptionService` is selected with `LOCK_CRYPTO_PROVIDER=aws-kms` and `LOCK_KMS_KEY_ID`. Credentials come from the default AWS chain (an IAM role in production). It uses a fixed encryption context, and `Decrypt` is pinned to the key id.
+> - **Rotation:** `V3__vault_kek_id.sql` records which KEK wrapped each vault key. To rotate: set the new key, put the old one in `LOCK_RETIRED_MASTER_KEYS`, and deploy. `VaultKeyRewrapper` then re-wraps vault keys in batches every 10 minutes, using `SKIP LOCKED`. When the `lock.vaults.kek.stale` metric reaches 0, remove the old key. The same path moves an existing local deployment onto KMS. Memory content is never re-encrypted, so locked memories and integrity proofs are untouched (tested).
+> - **Not tested against real AWS:** the tests use an in-memory fake KMS.
+> - **Still to do:** the IAM policy (`kms:Encrypt` and `kms:Decrypt` on that one key only) and enabling KMS automatic key rotation. Both are infrastructure, not code.
+
 ### 1.5 Observability baseline · S
 **Why.** The design doc (§38) lists metrics. There are only bare actuator endpoints today.
 
@@ -162,6 +181,14 @@ _Last reviewed: 2026-10-17_
 - Micrometer + Prometheus endpoint. Custom metrics: memories locked, seal-job lag, outbox backlog and age of the oldest event, upload failures, integrity-check failures.
 - Structured JSON logs with a request id. Never log decrypted content or tokens.
 - Readiness and liveness probes that include DB and storage health.
+
+> ✅ Done 2026-10-17.
+> - **Prometheus registry,** with metrics: `lock.memories.locked`, `lock.memories.purged`, `lock.integrity.failures`, `lock.uploads.failed`, `lock.seal.lag` (seconds), `lock.outbox.pending`, `lock.outbox.dead`, `lock.outbox.oldest.age` and `lock.vaults.kek.stale`. Tags never include user, vault or memory ids.
+> - **Request ids:** `RequestIdFilter` adds an `X-Request-Id` to every response and log line. Incoming ids are kept only if they are log-safe.
+> - **Logs:** set `LOCK_LOG_FORMAT=ecs` for JSON logs.
+> - **Health:** `/actuator/health/readiness` checks DB and storage, `/liveness` is separate, and details are never shown publicly.
+> - **Metrics access:** `/actuator/metrics` and `/actuator/prometheus` are **refused on the app port** (403/401). Set `LOCK_MANAGEMENT_PORT` to serve them on a private port for scraping.
+> - **Not done:** alert rules and dashboards (infrastructure).
 
 ### 1.6 Timeline pagination and an uncapped export · S
 **Why.** The timeline uses `limit` only (default 50). `ExportController` silently stops at `EXPORT_LIMIT = 200`, so users with more memories get an **incomplete export without any warning**. That breaks the "export anytime" promise.
@@ -171,7 +198,7 @@ _Last reviewed: 2026-10-17_
 - Export streams the vault in pages (no cap). The JSON is written with a streaming writer.
 - Client timeline uses infinite scroll (`useInfiniteQuery`).
 
-> ◐ Export part done 2026-10-17: `ExportController` walks the vault with an `(occurredAt, id)` keyset cursor (`MemoryService.timelineAfter`). Still to do: a cursor on the public timeline endpoint and infinite scroll in the client.
+> ✅ Done 2026-10-17. `GET /vaults/{id}/memories` takes `?cursor=` and returns `Next-Cursor` when more exist. The body is still a plain array, so older clients keep working. The cursor is an opaque base64 `(occurredAt, id)`. The export uses the same paging. The client shows a "Load older memories" button (`useInfiniteQuery`), with 50 per page.
 
 ---
 
@@ -251,3 +278,5 @@ _Last reviewed: 2026-10-17_
 |---|---|
 | 2026-10-17 | First version, based on `decisions.md` "Still open" and a review of the code. |
 | 2026-10-17 | Done: 0.1, 0.2 (branch protection still manual), 1.1, and the export half of 1.6. |
+| 2026-10-17 | Done: 1.2, 1.3, 1.6, and the 1.4 prod startup guard. Next: 1.5 observability, then 1.4 KMS. |
+| 2026-10-17 | Done: 1.4 (KMS + KEK rotation) and 1.5. **All of P1 is done.** Next: P2, starting with 2.1 thumbnails. |

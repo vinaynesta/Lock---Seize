@@ -19,22 +19,38 @@ public class ContentCipher {
         this.kek = kek;
     }
 
-    public byte[] newWrappedVaultKey() {
-        return kek.wrap(AesGcm.newKey());
+    /** A vault data key as stored: wrapped bytes plus the id of the KEK that wrapped them. */
+    public record WrappedKey(byte[] bytes, String kekId) {}
+
+    public WrappedKey newWrappedVaultKey() {
+        return new WrappedKey(kek.wrap(AesGcm.newKey()), kek.currentKekId());
     }
 
-    public byte[] encrypt(byte[] wrappedVaultKey, UUID recordId, String field, String plaintext) {
+    /** Re-wraps a vault key under the current KEK. The data key, and so all content, is unchanged. */
+    public WrappedKey rewrap(WrappedKey key) {
+        return new WrappedKey(kek.wrap(kek.unwrap(key.bytes(), key.kekId())), kek.currentKekId());
+    }
+
+    public String currentKekId() {
+        return kek.currentKekId();
+    }
+
+    public byte[] encrypt(WrappedKey vaultKey, UUID recordId, String field, String plaintext) {
         if (plaintext == null) {
             return null;
         }
-        return AesGcm.encrypt(kek.unwrap(wrappedVaultKey), plaintext.getBytes(StandardCharsets.UTF_8), aad(recordId, field));
+        return AesGcm.encrypt(unwrap(vaultKey), plaintext.getBytes(StandardCharsets.UTF_8), aad(recordId, field));
     }
 
-    public String decrypt(byte[] wrappedVaultKey, UUID recordId, String field, byte[] ciphertext) {
+    public String decrypt(WrappedKey vaultKey, UUID recordId, String field, byte[] ciphertext) {
         if (ciphertext == null) {
             return null;
         }
-        return new String(AesGcm.decrypt(kek.unwrap(wrappedVaultKey), ciphertext, aad(recordId, field)), StandardCharsets.UTF_8);
+        return new String(AesGcm.decrypt(unwrap(vaultKey), ciphertext, aad(recordId, field)), StandardCharsets.UTF_8);
+    }
+
+    private byte[] unwrap(WrappedKey vaultKey) {
+        return kek.unwrap(vaultKey.bytes(), vaultKey.kekId());
     }
 
     private static byte[] aad(UUID recordId, String field) {

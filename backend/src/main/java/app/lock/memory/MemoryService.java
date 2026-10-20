@@ -50,13 +50,14 @@ public class MemoryService {
     private final AuditService audit;
     private final OutboxPublisher outbox;
     private final EntityManager em;
+    private final MemoryMetrics metrics;
     private final LockProperties props;
     private final Clock clock;
 
     public MemoryService(MemoryRepository memories, MemoryAssetRepository assets, ReflectionRepository reflections,
                          DeletionRequestRepository deletions, VaultService vaults, IdentityService identity,
                          ContentCipher cipher, ObjectStorage storage, AuditService audit, OutboxPublisher outbox,
-                         EntityManager em, LockProperties props, Clock clock) {
+                         EntityManager em, MemoryMetrics metrics, LockProperties props, Clock clock) {
         this.memories = memories;
         this.assets = assets;
         this.reflections = reflections;
@@ -68,6 +69,7 @@ public class MemoryService {
         this.audit = audit;
         this.outbox = outbox;
         this.em = em;
+        this.metrics = metrics;
         this.props = props;
         this.clock = clock;
     }
@@ -119,7 +121,7 @@ public class MemoryService {
         if (c.revealAt() != null && !c.revealAt().isAfter(now)) {
             throw ApiException.badRequest("INVALID_REVEAL_AT", "revealAt must be in the future");
         }
-        byte[] key = access.wrappedKey();
+        ContentCipher.WrappedKey key = access.wrappedKey();
         UUID id = memory.getId();
         memory.writeContent(
                 cipher.encrypt(key, id, TITLE, c.title()),
@@ -184,13 +186,14 @@ public class MemoryService {
     @Transactional
     public int completeDueSeals(int batchSize) {
         Instant now = now();
-        List<Memory> due = memories.findSealingDue(now, PageRequest.of(0, batchSize));
+        List<Memory> due = memories.lockSealingDue(now, batchSize);
         due.forEach(m -> completeLock(m, now));
         return due.size();
     }
 
     private void completeLock(Memory memory, Instant now) {
         memory.completeLock(now);
+        metrics.memoryLocked();
         audit.record(AuditEventType.MEMORY_LOCKED, memory.getCreatedBy(), memory.getVaultId(), memory.getId(),
                 Map.of("contentHash", memory.getContentHash()));
         List<String> keys = assets.findByMemoryIdOrderByCreatedAtAsc(memory.getId()).stream().map(MemoryAsset::getObjectKey).toList();
@@ -220,27 +223,26 @@ public class MemoryService {
         return toView(memory, requireReadable(memory, userId));
     }
 
+    public record TimelinePage(List<MemoryView> memories, TimelineCursor next) {}
+
+    /**
+     * One timeline page, newest first. Pass the previous page's {@code next} as {@code after}, or null
+     * for the first page. {@code next} is null when there is nothing more.
+     */
     @Transactional(readOnly = true)
-    public List<MemoryView> timeline(UUID vaultId, UUID userId, Instant from, Instant to, MemoryState state, int limit) {
+    public TimelinePage timeline(UUID vaultId, UUID userId, Instant from, Instant to, MemoryState state,
+                                 TimelineCursor after, int limit) {
         VaultAccess access = vaults.requireMember(vaultId, userId);
         Instant lower = from != null ? from : Instant.EPOCH;
         Instant upper = to != null ? to : Instant.parse("9999-12-31T00:00:00Z");
-        return memories.timeline(vaultId, userId, lower, upper, state, PageRequest.of(0, Math.clamp(limit, 1, 200)))
-                .stream().map(m -> toSummary(m, access)).toList();
-    }
-
-    /**
-     * The next page of the whole vault in timeline order. Pass the last memory of the previous page as
-     * the cursor, or null for the first page. An empty list means the end.
-     */
-    @Transactional(readOnly = true)
-    public List<MemoryView> timelineAfter(UUID vaultId, UUID userId, MemoryView cursor, int limit) {
-        VaultAccess access = vaults.requireMember(vaultId, userId);
-        PageRequest page = PageRequest.of(0, Math.clamp(limit, 1, 200));
-        List<Memory> found = cursor == null
-                ? memories.timeline(vaultId, userId, Instant.EPOCH, Instant.parse("9999-12-31T00:00:00Z"), null, page)
-                : memories.timelineAfter(vaultId, userId, cursor.occurredAt(), cursor.id(), page);
-        return found.stream().map(m -> toSummary(m, access)).toList();
+        int size = Math.clamp(limit, 1, 200);
+        // Fetch one extra row to know whether another page exists without a count query.
+        List<Memory> found = memories.timeline(vaultId, userId, lower, upper, state,
+                after == null ? null : after.occurredAt(), after == null ? null : after.id(), PageRequest.of(0, size + 1));
+        boolean more = found.size() > size;
+        List<MemoryView> page = found.stream().limit(size).map(m -> toSummary(m, access)).toList();
+        TimelineCursor next = more ? new TimelineCursor(page.getLast().occurredAt(), page.getLast().id()) : null;
+        return new TimelinePage(page, next);
     }
 
     public record ReliveView(MemoryView memory, long daysSinceLocked, List<ReflectionView> reflections, List<MemoryView> samePeriod) {}
@@ -336,6 +338,9 @@ public class MemoryService {
             }
         }
         boolean intact = current.equals(memory.getContentHash()) && failures.isEmpty();
+        if (!intact) {
+            metrics.integrityFailed();
+        }
         long days = memory.getLockedAt() == null ? 0 : Duration.between(memory.getLockedAt(), now()).toDays();
         return new IntegrityReport(memoryId, memory.getState(), intact, memory.getContentHash(), current,
                 memory.getLockedAt(), days, memoryAssets.size(), failures);
@@ -387,8 +392,7 @@ public class MemoryService {
     @Transactional
     public int executeDueDeletions(int batchSize) {
         Instant now = now();
-        List<DeletionRequest> due = deletions.findByStatusAndExecuteAfterLessThanEqual(
-                DeletionRequest.Status.PENDING, now, PageRequest.of(0, batchSize));
+        List<DeletionRequest> due = deletions.lockDue(now, batchSize);
         if (due.isEmpty()) {
             return 0;
         }
@@ -415,6 +419,7 @@ public class MemoryService {
         audit.record(AuditEventType.MEMORY_PURGED, request.getRequestedBy(), memory.getVaultId(), memory.getId(),
                 Map.of("deletionRequestId", request.getId().toString(), "contentHash", String.valueOf(memory.getContentHash())));
         outbox.publish("memory", memory.getId(), "memory.purged", Map.of("objectKeys", keys));
+        metrics.memoryPurged();
     }
 
     // ---- Authorization helpers (also used by the media module) ----------------------------------
@@ -472,7 +477,7 @@ public class MemoryService {
 
     private MemoryView view(Memory m, VaultAccess access, List<MemoryView.AssetView> assetViews) {
         boolean sealed = m.isSealedCapsule(now());
-        byte[] key = access.wrappedKey();
+        ContentCipher.WrappedKey key = access.wrappedKey();
         UUID id = m.getId();
         return new MemoryView(id, m.getVaultId(), m.getCreatedBy(), m.getState(),
                 sealed ? null : cipher.decrypt(key, id, TITLE, m.getTitleCt()),

@@ -32,18 +32,18 @@ public class ExportController {
         UUID userId = CurrentUser.id(jwt);
         // Walk the whole vault page by page: an export must never be silently truncated.
         List<ExportedMemory> exported = new ArrayList<>();
-        MemoryView cursor = null;
-        List<MemoryView> page;
-        while (!(page = memories.timelineAfter(vaultId, userId, cursor, PAGE_SIZE)).isEmpty()) {
-            for (MemoryView summary : page) {
+        TimelineCursor cursor = null;
+        do {
+            MemoryService.TimelinePage page = memories.timeline(vaultId, userId, null, null, null, cursor, PAGE_SIZE);
+            for (MemoryView summary : page.memories()) {
                 MemoryView full = memories.get(summary.id(), userId);
                 List<MemoryService.ReflectionView> refl = full.state().isLocked() && !full.sealedCapsule()
                         ? memories.listReflections(full.id(), userId)
                         : List.of();
                 exported.add(new ExportedMemory(full, refl));
             }
-            cursor = page.getLast();
-        }
+            cursor = page.next();
+        } while (cursor != null);
         return new VaultExport("lock-export/v1", vaultId, Instant.now(), exported);
     }
 

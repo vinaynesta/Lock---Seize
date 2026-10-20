@@ -19,12 +19,39 @@ spring:
 
 server:
   port: ${PORT:8080}
+  # Rate limits key on the client IP. Behind a load balancer set this to "framework" so the IP comes
+  # from X-Forwarded-For. Leave it "none" otherwise, or clients could spoof the header to dodge limits.
+  forward-headers-strategy: ${LOCK_FORWARD_HEADERS:none}
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        # health and info are public. metrics and prometheus are refused on the app port
+        # (SecurityConfig); set LOCK_MANAGEMENT_PORT to serve actuator on a private port for scraping.
+        include: health,info,metrics,prometheus
+  server:
+    port: ${LOCK_MANAGEMENT_PORT:}
+  endpoint:
+    health:
+      probes:
+        enabled: true            # /actuator/health/liveness and /actuator/health/readiness
+      group:
+        readiness:
+          include: readinessState,db,storage
+      show-details: never        # never leak DB/storage error details to anonymous callers
+  metrics:
+    tags:
+      application: lock
+
+logging:
+  pattern:
+    # Every line carries the request id set by RequestIdFilter.
+    correlation: "[%X{requestId:-}] "
+  structured:
+    format:
+      # Set LOCK_LOG_FORMAT=ecs (or logstash) in production for one JSON object per line.
+      console: ${LOCK_LOG_FORMAT:}
 
 springdoc:
   swagger-ui:
@@ -41,8 +68,19 @@ lock:
     ttl: PT15M          # access token; clients renew it with the refresh token
     refresh-ttl: P30D   # sliding: every refresh issues a new token valid this long
   crypto:
-    # Dev-only key-encryption key (base64, 32 bytes). Production: replace LocalKeyEncryptionService with KMS.
+    # local: KEK is master-key below. aws-kms: KEK never leaves AWS KMS (recommended for production).
+    provider: ${LOCK_CRYPTO_PROVIDER:local}
+    # Dev-only key-encryption key (base64, 32 bytes). Production: set LOCK_MASTER_KEY, or use aws-kms.
     master-key: ${LOCK_MASTER_KEY:U41EknbduMk8SqoWrNBc3ZvWCZ2xTS/5+K8C9tmG4Sw=}
+    # Old local keys, comma-separated, used only to unwrap until the re-wrap job has moved every vault.
+    retired-master-keys: ${LOCK_RETIRED_MASTER_KEYS:}
+    kms-key-id: ${LOCK_KMS_KEY_ID:}          # key ARN or alias/..., required for aws-kms
+    kms-region: ${LOCK_KMS_REGION:${LOCK_S3_REGION:us-east-1}}
+    kms-endpoint: ${LOCK_KMS_ENDPOINT:}      # only for LocalStack-style testing
+  rate-limit:
+    auth-requests-per-minute: 20   # per client IP, per /auth endpoint
+    max-failed-logins: 5           # wrong passwords per account before a temporary lockout
+    lockout: PT15M
   memory:
     cooling-off: ${LOCK_COOLING_OFF:PT24H}
     deletion-grace-period: P30D

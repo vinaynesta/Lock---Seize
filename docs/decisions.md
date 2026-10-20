@@ -21,7 +21,7 @@ swap later.
 1. **Encryption model: server-side envelope encryption** (feasibility recommendation).
    - Each vault has a random AES-256 data key, wrapped by a key-encryption key (KEK).
    - Memory text and reflections are AES-GCM encrypted. The associated data is `recordId:field`, so a ciphertext copied elsewhere won't decrypt.
-   - The KEK is a configuration value for now (`LocalKeyEncryptionService`). Replace it with KMS/HSM before production.
+   - The KEK is either a configuration value (`LocalKeyEncryptionService`, for development) or kept in AWS KMS (`AwsKmsKeyEncryptionService`, for production). Each vault records which KEK wrapped its key (`kek_id`). Rotating the KEK re-wraps only the vault keys, never memory content (roadmap 1.4).
    - True end-to-end encryption ("Sealed Vault") is a later premium tier.
 2. **Password changes never re-encrypt content.** Vault keys are wrapped by the KEK, not the password (invariant 4).
 3. **Lock has a cooling-off window.** `DRAFT → SEALING → LOCKED`.
@@ -55,6 +55,6 @@ swap later.
 - Recovery model for when the Sealed Vault (E2E) tier arrives.
 - Vault-key rotation on member removal.
 - Media processing workers: thumbnails, transcoding, malware scanning (plug into the outbox).
-- MFA, rate limiting. (Refresh tokens are done: 15-minute access tokens plus rotating 30-day refresh tokens with reuse detection; see `docs/roadmap.md` 1.1.)
+- MFA. (Rate limiting is done, in memory per instance, see roadmap 1.2. Refresh tokens are done: 15-minute access tokens plus rotating 30-day refresh tokens with reuse detection; see `docs/roadmap.md` 1.1.)
 - Storage limits per plan, cold-tier archival.
-- Scheduler locking (ShedLock) once there is more than one instance.
+- ~~Scheduler locking~~ Done: jobs claim work with `FOR UPDATE SKIP LOCKED` (roadmap 1.3).

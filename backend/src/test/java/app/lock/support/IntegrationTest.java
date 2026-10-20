@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import app.lock.media.storage.InMemoryObjectStorage;
+import app.lock.security.RateLimiter;
 import com.jayway.jsonpath.JsonPath;
 import java.time.Instant;
 import java.util.UUID;
@@ -43,9 +44,13 @@ public abstract class IntegrationTest {
     @Autowired
     protected JdbcTemplate jdbc;
 
+    @Autowired
+    protected RateLimiter rateLimiter;
+
     @BeforeEach
     void resetClock() {
         clock.set(START);
+        rateLimiter.clear(); // the clock is reset, so counts from earlier tests would never age out
     }
 
     @TestConfiguration(proxyBeanMethods = false)

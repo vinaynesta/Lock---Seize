@@ -8,8 +8,8 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Periodic background work. Each job is idempotent and safe to run on several instances. For
- * multi-instance production add ShedLock or move the jobs to a dedicated worker.
+ * Periodic background work. Safe on several instances: each job claims its batch with
+ * {@code FOR UPDATE SKIP LOCKED}, so instances split the work instead of repeating it.
  */
 @Component
 class LifecycleJobs {

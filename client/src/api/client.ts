@@ -29,7 +29,9 @@ export interface Tokens {
 let tokens: Tokens | null = null;
 let onTokensChanged: ((tokens: Tokens) => void) | null = null;
 let onUnauthorized: (() => void) | null = null;
-let refreshing: Promise<boolean> | null = null;
+/** 'rejected': the server refused the refresh token (sign out). 'failed': network/429, keep the session. */
+type RefreshResult = 'ok' | 'rejected' | 'failed';
+let refreshing: Promise<RefreshResult> | null = null;
 
 export function setTokens(next: Tokens | null) {
   tokens = next;
@@ -53,23 +55,24 @@ export function setUnauthorizedHandler(handler: (() => void) | null) {
  * Exchanges the refresh token for a new pair. Single-flight: concurrent 401s share one refresh,
  * because each refresh token is single-use and a second exchange would look like token theft.
  */
-function refreshTokens(): Promise<boolean> {
-  refreshing ??= (async () => {
+function refreshTokens(): Promise<RefreshResult> {
+  refreshing ??= (async (): Promise<RefreshResult> => {
     const current = tokens;
-    if (!current) return false;
+    if (!current) return 'rejected';
     try {
       const res = await fetch(API_URL + '/auth/refresh', {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken: current.refreshToken }),
       });
-      if (!res.ok) return false;
+      if (res.status === 401) return 'rejected';
+      if (!res.ok) return 'failed';
       const body = (await res.json()) as TokenResponse;
       tokens = { accessToken: body.accessToken, refreshToken: body.refreshToken };
       onTokensChanged?.(tokens);
-      return true;
+      return 'ok';
     } catch {
-      return false;
+      return 'failed';
     }
   })().finally(() => {
     refreshing = null;
@@ -85,6 +88,16 @@ export async function request<T>(
   body?: unknown,
   headers: Record<string, string> = {},
 ): Promise<T> {
+  return (await requestWithHeaders<T>(method, path, body, headers)).data;
+}
+
+/** Like {@link request}, but also returns the response headers (e.g. a pagination cursor). */
+export async function requestWithHeaders<T>(
+  method: Method,
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): Promise<{ data: T; headers: Headers }> {
   const send = () =>
     fetch(API_URL + path, {
       method,
@@ -103,10 +116,11 @@ export async function request<T>(
   // A 401 without a domain error code is the expired or rejected access token (a wrong password,
   // for instance, comes back as 401 INVALID_CREDENTIALS and must not sign the user out).
   if (res.status === 401 && tokens && !problem?.code) {
-    if (await refreshTokens()) {
+    const refreshed = await refreshTokens();
+    if (refreshed === 'ok') {
       res = await send();
       problem = res.ok ? null : await readProblem(res);
-    } else {
+    } else if (refreshed === 'rejected') {
       onUnauthorized?.();
     }
   }
@@ -115,9 +129,9 @@ export async function request<T>(
     throw new ApiError(res.status, p.code, p.detail ?? `Request failed (${res.status})`);
   }
   if (res.status === 204) {
-    return undefined as T;
+    return { data: undefined as T, headers: res.headers };
   }
-  return (await res.json()) as T;
+  return { data: (await res.json()) as T, headers: res.headers };
 }
 
 async function readProblem(res: Response): Promise<Problem> {

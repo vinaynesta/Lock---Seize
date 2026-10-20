@@ -1,4 +1,4 @@
-import { request } from './client';
+import { request, requestWithHeaders } from './client';
 import type {
   Asset,
   AssetType,
@@ -11,6 +11,7 @@ import type {
   MemoryState,
   Reflection,
   Relive,
+  TimelinePage,
   TokenResponse,
   UploadTicket,
   Vault,
@@ -44,12 +45,18 @@ export const api = {
     request<Member>('POST', `/invitations/${vaultId}/${accept ? 'accept' : 'decline'}`),
 
   // Memories
-  timeline: (vaultId: string, params: { state?: MemoryState; limit?: number } = {}) => {
+  /** One timeline page. `nextCursor` is set when more memories exist; pass it back as `cursor`. */
+  timeline: async (
+    vaultId: string,
+    params: { state?: MemoryState; limit?: number; cursor?: string } = {},
+  ): Promise<TimelinePage> => {
     const q = new URLSearchParams();
     if (params.state) q.set('state', params.state);
     if (params.limit) q.set('limit', String(params.limit));
+    if (params.cursor) q.set('cursor', params.cursor);
     const qs = q.toString();
-    return request<Memory[]>('GET', `/vaults/${vaultId}/memories${qs ? `?${qs}` : ''}`);
+    const { data, headers } = await requestWithHeaders<Memory[]>('GET', `/vaults/${vaultId}/memories${qs ? `?${qs}` : ''}`);
+    return { memories: data, nextCursor: headers.get('Next-Cursor') ?? undefined };
   },
   memory: (memoryId: string) => request<Memory>('GET', `/memories/${memoryId}`),
   createMemory: (vaultId: string, input: MemoryInput, idempotencyKey: string) =>

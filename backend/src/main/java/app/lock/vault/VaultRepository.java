@@ -14,4 +14,17 @@ public interface VaultRepository extends JpaRepository<Vault, UUID> {
             order by v.createdAt
             """)
     List<Vault> findActiveForUser(UUID userId);
+
+    /** Vaults whose data key is not yet wrapped by {@code kekId}, row-locked for the re-wrap job. */
+    @Query(value = """
+            SELECT * FROM vaults
+            WHERE kek_id IS DISTINCT FROM :kekId
+            ORDER BY created_at
+            LIMIT :limit
+            FOR UPDATE SKIP LOCKED
+            """, nativeQuery = true)
+    List<Vault> lockNotWrappedBy(String kekId, int limit);
+
+    @Query(value = "SELECT count(*) FROM vaults WHERE kek_id IS DISTINCT FROM :kekId", nativeQuery = true)
+    long countNotWrappedBy(String kekId);
 }
