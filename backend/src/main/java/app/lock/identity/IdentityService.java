@@ -3,6 +3,7 @@ package app.lock.identity;
 import app.lock.audit.AuditEventType;
 import app.lock.audit.AuditService;
 import app.lock.common.ApiException;
+import app.lock.security.LoginAttemptGuard;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.UUID;
@@ -19,16 +20,18 @@ public class IdentityService {
     private final PasswordEncoder passwordEncoder;
     private final TokenService tokens;
     private final RefreshTokenService refreshTokens;
+    private final LoginAttemptGuard attempts;
     private final AuditService audit;
     private final ApplicationEventPublisher events;
     private final Clock clock;
 
     public IdentityService(UserRepository users, PasswordEncoder passwordEncoder, TokenService tokens,
-                           RefreshTokenService refreshTokens, AuditService audit, ApplicationEventPublisher events, Clock clock) {
+                           RefreshTokenService refreshTokens, LoginAttemptGuard attempts, AuditService audit, ApplicationEventPublisher events, Clock clock) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.tokens = tokens;
         this.refreshTokens = refreshTokens;
+        this.attempts = attempts;
         this.audit = audit;
         this.events = events;
         this.clock = clock;
@@ -48,10 +51,18 @@ public class IdentityService {
 
     @Transactional
     public Session login(String email, String password) {
+        String subject = "login:" + email.trim().toLowerCase();
+        attempts.checkNotLocked(subject);
         User user = users.findByEmailIgnoreCase(email.trim())
                 .filter(u -> u.getStatus() == User.Status.ACTIVE)
                 .filter(u -> passwordEncoder.matches(password, u.getPasswordHash()))
-                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Invalid email or password"));
+                .orElse(null);
+        if (user == null) {
+            // Counted for unknown emails too, so the lockout does not reveal which accounts exist.
+            attempts.recordFailure(subject);
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Invalid email or password");
+        }
+        attempts.recordSuccess(subject);
         return new Session(tokens.issue(user), refreshTokens.start(user.getId()));
     }
 
@@ -78,10 +89,14 @@ public class IdentityService {
      */
     @Transactional
     public Session changePassword(UUID userId, String currentPassword, String newPassword) {
+        String subject = "reauth:" + userId;
+        attempts.checkNotLocked(subject);
         User user = get(userId);
         if (!passwordEncoder.matches(currentPassword, user.getPasswordHash())) {
+            attempts.recordFailure(subject);
             throw new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Current password is incorrect");
         }
+        attempts.recordSuccess(subject);
         user.changePasswordHash(passwordEncoder.encode(newPassword), Instant.now(clock));
         refreshTokens.revokeAll(userId);
         audit.record(AuditEventType.PASSWORD_CHANGED, userId, null, null);
@@ -91,9 +106,14 @@ public class IdentityService {
     /** Re-authentication for sensitive operations such as deletion requests. */
     @Transactional(readOnly = true)
     public void verifyPassword(UUID userId, String password) {
+        // Shares the counter with change-password: a stolen access token must not allow guessing.
+        String subject = "reauth:" + userId;
+        attempts.checkNotLocked(subject);
         if (!passwordEncoder.matches(password, get(userId).getPasswordHash())) {
+            attempts.recordFailure(subject);
             throw new ApiException(HttpStatus.UNAUTHORIZED, "REAUTH_FAILED", "Password confirmation failed");
         }
+        attempts.recordSuccess(subject);
     }
 
     @Transactional(readOnly = true)

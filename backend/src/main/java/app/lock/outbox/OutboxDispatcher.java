@@ -19,7 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class OutboxDispatcher {
 
     private static final Logger log = LoggerFactory.getLogger(OutboxDispatcher.class);
-    private static final int MAX_ATTEMPTS = 10;
+    static final int MAX_ATTEMPTS = 10;
     private static final int BATCH_SIZE = 100;
 
     private final OutboxEventRepository repository;

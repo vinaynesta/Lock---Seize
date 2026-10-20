@@ -127,3 +127,9 @@ export interface Problem {
   detail?: string;
   code?: string;
 }
+
+export interface TimelinePage {
+  memories: Memory[];
+  /** Opaque; pass back as `cursor` to load the next page. Undefined on the last page. */
+  nextCursor?: string;
+}

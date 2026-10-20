@@ -18,4 +18,14 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
     List<OutboxEvent> lockNextBatch(int maxAttempts, int limit);
 
     List<OutboxEvent> findByAggregateIdOrderByCreatedAtAsc(UUID aggregateId);
+
+    @Query(value = "SELECT count(*) FROM outbox_events WHERE processed_at IS NULL AND attempts < :maxAttempts", nativeQuery = true)
+    long countPending(int maxAttempts);
+
+    /** Events that used up their retries and need a human. */
+    @Query(value = "SELECT count(*) FROM outbox_events WHERE processed_at IS NULL AND attempts >= :maxAttempts", nativeQuery = true)
+    long countDead(int maxAttempts);
+
+    @Query(value = "SELECT min(created_at) FROM outbox_events WHERE processed_at IS NULL AND attempts < :maxAttempts", nativeQuery = true)
+    java.time.Instant oldestPending(int maxAttempts);
 }

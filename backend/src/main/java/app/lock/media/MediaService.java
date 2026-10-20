@@ -10,6 +10,8 @@ import app.lock.memory.MemoryAsset;
 import app.lock.memory.MemoryAssetRepository;
 import app.lock.memory.MemoryService;
 import app.lock.outbox.OutboxPublisher;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
@@ -18,7 +20,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -45,8 +46,12 @@ public class MediaService {
     private final LockProperties props;
     private final Clock clock;
 
+    private final Counter uploadFailures;
+
     public MediaService(MemoryService memories, MemoryAssetRepository assets, ObjectStorage storage,
-                        AuditService audit, OutboxPublisher outbox, LockProperties props, Clock clock) {
+                        AuditService audit, OutboxPublisher outbox, MeterRegistry registry, LockProperties props, Clock clock) {
+        this.uploadFailures = Counter.builder("lock.uploads.failed")
+                .description("Uploads rejected on completion because size or checksum did not match").register(registry);
         this.memories = memories;
         this.assets = assets;
         this.storage = storage;
@@ -94,6 +99,7 @@ public class MediaService {
         boolean checksumOk = info.checksumSha256Base64() == null || info.checksumSha256Base64().equals(asset.getChecksumSha256());
         if (!sizeOk || !checksumOk) {
             asset.markVerificationFailed();
+            uploadFailures.increment();
             audit.record(AuditEventType.ASSET_VERIFICATION_FAILED, userId, memory.getVaultId(), memory.getId(),
                     Map.of("assetId", assetId.toString(), "sizeOk", sizeOk, "checksumOk", checksumOk));
             outbox.publish("asset", assetId, "asset.verification_failed", Map.of("objectKey", asset.getObjectKey()));
@@ -134,8 +140,7 @@ public class MediaService {
     @Transactional
     public int expireStaleUploads(int batchSize) {
         Instant cutoff = Instant.now(clock).minus(props.memory().uploadExpiry());
-        List<MemoryAsset> stale = assets.findByUploadStatusAndCreatedAtBefore(
-                MemoryAsset.UploadStatus.INITIATED, cutoff, PageRequest.of(0, batchSize));
+        List<MemoryAsset> stale = assets.lockStaleUploads(cutoff, batchSize);
         for (MemoryAsset asset : stale) {
             asset.markExpired();
             audit.record(AuditEventType.ASSET_EXPIRED, null, null, asset.getMemoryId(), Map.of("assetId", asset.getId().toString()));

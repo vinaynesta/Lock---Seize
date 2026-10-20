@@ -19,29 +19,39 @@ public interface MemoryRepository extends JpaRepository<Memory, UUID> {
 
     Optional<Memory> findByCreatedByAndIdempotencyKey(UUID createdBy, String idempotencyKey);
 
-    /** Timeline page: newest first, optionally bounded by date and state. */
+    /**
+     * Timeline page: newest first, optionally bounded by date and state. Keyset pagination: pass the
+     * (occurredAt, id) of the last memory already seen as the cursor, or nulls for the first page.
+     */
     @Query("""
             select m from Memory m
             where m.vaultId = :vaultId
               and m.occurredAt >= :from and m.occurredAt < :to
               and (:state is null or m.state = :state)
               and (m.state <> app.lock.memory.MemoryState.DRAFT or m.createdBy = :viewerId)
+              and (cast(:afterId as uuid) is null
+                   or m.occurredAt < :afterOccurredAt or (m.occurredAt = :afterOccurredAt and m.id < :afterId))
             order by m.occurredAt desc, m.id desc
             """)
-    List<Memory> timeline(UUID vaultId, UUID viewerId, Instant from, Instant to, MemoryState state, Pageable page);
+    List<Memory> timeline(UUID vaultId, UUID viewerId, Instant from, Instant to, MemoryState state,
+                          Instant afterOccurredAt, UUID afterId, Pageable page);
 
-    /** Keyset page in timeline order, strictly after the (occurredAt, id) cursor. Used to walk a whole vault. */
-    @Query("""
-            select m from Memory m
-            where m.vaultId = :vaultId
-              and (m.occurredAt < :afterOccurredAt or (m.occurredAt = :afterOccurredAt and m.id < :afterId))
-              and (m.state <> app.lock.memory.MemoryState.DRAFT or m.createdBy = :viewerId)
-            order by m.occurredAt desc, m.id desc
-            """)
-    List<Memory> timelineAfter(UUID vaultId, UUID viewerId, Instant afterOccurredAt, UUID afterId, Pageable page);
+    /**
+     * Due seals, row-locked. SKIP LOCKED lets several app instances run the job at once: each claims
+     * a disjoint batch instead of sealing (and auditing) the same memory twice.
+     */
+    @Query(value = """
+            SELECT * FROM memories
+            WHERE state = 'SEALING' AND sealing_until <= :now
+            ORDER BY sealing_until
+            LIMIT :limit
+            FOR UPDATE SKIP LOCKED
+            """, nativeQuery = true)
+    List<Memory> lockSealingDue(Instant now, int limit);
 
-    @Query("select m from Memory m where m.state = app.lock.memory.MemoryState.SEALING and m.sealingUntil <= :now")
-    List<Memory> findSealingDue(Instant now, Pageable page);
+    /** Oldest cooling-off end that has already passed: how far behind the seal job is. */
+    @Query(value = "SELECT min(sealing_until) FROM memories WHERE state = 'SEALING' AND sealing_until <= :now", nativeQuery = true)
+    Instant oldestOverdueSeal(Instant now);
 
     /** "On this day": locked memories from the same calendar day in earlier years, across the user's vaults. */
     @Query(value = """

@@ -1,6 +1,9 @@
 package app.lock.config;
 
 import app.lock.media.storage.LocalStorageController;
+import app.lock.memory.MemoryController;
+import app.lock.security.AuthRateLimitFilter;
+import app.lock.security.RateLimiter;
 import java.util.Base64;
 import java.util.List;
 import javax.crypto.SecretKey;
@@ -19,6 +22,7 @@ import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenResolver;
 import org.springframework.security.oauth2.server.resource.web.DefaultBearerTokenResolver;
+import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -28,14 +32,18 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http, RateLimiter limiter, LockProperties props) throws Exception {
         return http
+                .addFilterBefore(new AuthRateLimitFilter(limiter, props), BearerTokenAuthenticationFilter.class)
                 .cors(Customizer.withDefaults())
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/auth/register", "/auth/login", "/auth/refresh", "/auth/logout").permitAll()
-                        .requestMatchers("/actuator/health/**", "/actuator/info").permitAll()
+                        .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
+                        // Metrics are for operators, not app users: never served on the public port.
+                        // Scrape them on the private management port (LOCK_MANAGEMENT_PORT) instead.
+                        .requestMatchers("/actuator/**").denyAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         // Stand-in for presigned S3 URLs; the controller only exists when lock.storage.type=memory.
                         .requestMatchers(LocalStorageController.PATH + "/**").permitAll()
@@ -64,6 +72,7 @@ public class SecurityConfig {
         cors.setAllowedOrigins(props.corsAllowedOrigins() == null ? List.of() : props.corsAllowedOrigins());
         cors.setAllowedMethods(List.of("GET", "POST", "PATCH", "DELETE", "OPTIONS"));
         cors.setAllowedHeaders(List.of("Authorization", "Content-Type", "Idempotency-Key", "Accept"));
+        cors.setExposedHeaders(List.of(MemoryController.NEXT_CURSOR, "Retry-After"));
         cors.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", cors);

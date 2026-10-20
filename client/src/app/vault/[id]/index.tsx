@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Link, router, Stack, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { api } from '@/api/lock';
@@ -17,6 +17,8 @@ const FILTERS: { label: string; state?: MemoryState }[] = [
   { label: 'Archived', state: 'ARCHIVED' },
 ];
 
+const PAGE_SIZE = 50;
+
 /** Groups the timeline by year, newest first (design doc §33). */
 function byYear(memories: Memory[]): [string, Memory[]][] {
   const groups = new Map<string, Memory[]>();
@@ -32,10 +34,13 @@ export default function VaultTimeline() {
   const t = useTheme();
   const [filter, setFilter] = useState<MemoryState | undefined>();
   const vault = useQuery({ queryKey: ['vault', id], queryFn: () => api.vault(id) });
-  const timeline = useQuery({
+  const timeline = useInfiniteQuery({
     queryKey: ['timeline', id, filter],
-    queryFn: () => api.timeline(id, { state: filter, limit: 200 }),
+    queryFn: ({ pageParam }) => api.timeline(id, { state: filter, limit: PAGE_SIZE, cursor: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.nextCursor,
   });
+  const memories = useMemo(() => timeline.data?.pages.flatMap((p) => p.memories), [timeline.data]);
 
   return (
     <Screen>
@@ -83,19 +88,27 @@ export default function VaultTimeline() {
 
       {timeline.isPending ? <Loading /> : null}
       <ErrorText error={timeline.error} />
-      {timeline.data && timeline.data.length === 0 ? (
+      {memories && memories.length === 0 ? (
         <Empty title="Nothing here yet" hint="Capture a moment, then lock it to preserve it." />
       ) : null}
-      {timeline.data
-        ? byYear(timeline.data).map(([year, memories]) => (
+      {memories
+        ? byYear(memories).map(([year, inYear]) => (
             <View key={year} style={{ gap: space.sm }}>
               <Label>{year}</Label>
-              {memories.map((m) => (
+              {inYear.map((m) => (
                 <MemoryCard key={m.id} memory={m} />
               ))}
             </View>
           ))
         : null}
+      {timeline.hasNextPage ? (
+        <Button
+          title="Load older memories"
+          variant="secondary"
+          onPress={() => void timeline.fetchNextPage()}
+          loading={timeline.isFetchingNextPage}
+        />
+      ) : null}
     </Screen>
   );
 }

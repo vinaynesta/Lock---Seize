@@ -287,6 +287,44 @@ class MemoryLifecycleIntegrationTest extends IntegrationTest {
     }
 
     @Test
+    void timelinePagesWithCursorUntilTheEnd() throws Exception {
+        TestUser finn = register("Finn");
+        String vaultId = personalVault(finn);
+        for (int i = 0; i < 7; i++) {
+            // Pairs share an occurredAt, so a page boundary can fall between two equal timestamps.
+            mvc.perform(json(post("/vaults/" + vaultId + "/memories"), """
+                            {"title":"Page %d","occurredAt":"%s"}""".formatted(i, START.minus(Duration.ofDays(i / 2))))
+                            .with(finn.auth()))
+                    .andExpect(status().isCreated());
+        }
+
+        java.util.List<String> seen = new java.util.ArrayList<>();
+        String cursor = null;
+        int pages = 0;
+        do {
+            var request = get("/vaults/" + vaultId + "/memories").param("limit", "3").with(finn.auth());
+            if (cursor != null) {
+                request.param("cursor", cursor);
+            }
+            var result = mvc.perform(request).andExpect(status().isOk()).andReturn().getResponse();
+            seen.addAll(com.jayway.jsonpath.JsonPath.read(result.getContentAsString(), "$[*].id"));
+            cursor = result.getHeader("Next-Cursor");
+            pages++;
+        } while (cursor != null);
+
+        assertThat(pages).isEqualTo(3); // 3 + 3 + 1, and no empty trailing page
+        assertThat(seen).hasSize(7).doesNotHaveDuplicates();
+    }
+
+    @Test
+    void malformedCursorIsRejected() throws Exception {
+        TestUser gus = register("Gus");
+        mvc.perform(get("/vaults/" + personalVault(gus) + "/memories").param("cursor", "not-a-cursor").with(gus.auth()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_CURSOR"));
+    }
+
+    @Test
     void exportIncludesEveryMemoryBeyondOnePage() throws Exception {
         TestUser erin = register("Erin");
         String vaultId = personalVault(erin);

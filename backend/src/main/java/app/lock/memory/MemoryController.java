@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -42,14 +43,27 @@ public class MemoryController {
         return memories.create(vaultId, CurrentUser.id(jwt), req.toContent(), idempotencyKey);
     }
 
+    /**
+     * Timeline, newest first. The body stays a plain array; when more memories exist the response
+     * carries a {@code Next-Cursor} header to pass back as {@code ?cursor=} for the next page.
+     */
     @GetMapping("/vaults/{vaultId}/memories")
-    public List<MemoryView> timeline(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID vaultId,
-                                     @RequestParam(required = false) Instant from,
-                                     @RequestParam(required = false) Instant to,
-                                     @RequestParam(required = false) MemoryState state,
-                                     @RequestParam(defaultValue = "50") int limit) {
-        return memories.timeline(vaultId, CurrentUser.id(jwt), from, to, state, limit);
+    public ResponseEntity<List<MemoryView>> timeline(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID vaultId,
+                                                     @RequestParam(required = false) Instant from,
+                                                     @RequestParam(required = false) Instant to,
+                                                     @RequestParam(required = false) MemoryState state,
+                                                     @RequestParam(required = false) @Size(max = 200) String cursor,
+                                                     @RequestParam(defaultValue = "50") int limit) {
+        MemoryService.TimelinePage page = memories.timeline(vaultId, CurrentUser.id(jwt), from, to, state,
+                cursor == null || cursor.isBlank() ? null : TimelineCursor.decode(cursor), limit);
+        ResponseEntity.BodyBuilder response = ResponseEntity.ok();
+        if (page.next() != null) {
+            response.header(NEXT_CURSOR, page.next().encode());
+        }
+        return response.body(page.memories());
     }
+
+    public static final String NEXT_CURSOR = "Next-Cursor";
 
     @GetMapping("/memories/{memoryId}")
     public MemoryView get(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID memoryId) {
