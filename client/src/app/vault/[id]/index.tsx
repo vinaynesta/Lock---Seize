@@ -1,12 +1,13 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Link, router, Stack, useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 
 import { api } from '@/api/lock';
 import type { Memory, MemoryState } from '@/api/types';
 import { MemoryCard } from '@/components/MemoryCard';
-import { Button, Empty, ErrorText, Label, Loading, Screen } from '@/components/ui';
+import { PendingSync } from '@/components/PendingSync';
+import { Body, Button, Empty, ErrorText, Field, Label, Loading, Screen } from '@/components/ui';
 import { radius, space, useTheme } from '@/theme';
 
 const FILTERS: { label: string; state?: MemoryState }[] = [
@@ -33,7 +34,21 @@ export default function VaultTimeline() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const t = useTheme();
   const [filter, setFilter] = useState<MemoryState | undefined>();
-  const vault = useQuery({ queryKey: ['vault', id], queryFn: () => api.vault(id) });
+  const [query, setQuery] = useState('');
+  const [debounced, setDebounced] = useState('');
+  useEffect(() => {
+    const handle = setTimeout(() => setDebounced(query.trim()), 300);
+    return () => clearTimeout(handle);
+  }, [query]);
+  const search = useQuery({
+    queryKey: ['search', id, debounced],
+    queryFn: () => api.search(id, debounced),
+    enabled: debounced.length > 0,
+  });
+  const vault = useQuery({
+    queryKey: ['vault', id],
+    queryFn: () => api.vault(id),
+  });
   const timeline = useInfiniteQuery({
     queryKey: ['timeline', id, filter],
     queryFn: ({ pageParam }) => api.timeline(id, { state: filter, limit: PAGE_SIZE, cursor: pageParam }),
@@ -63,52 +78,94 @@ export default function VaultTimeline() {
         onPress={() => router.push({ pathname: '/vault/[id]/compose', params: { id } })}
       />
 
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
-        {FILTERS.map((f) => {
-          const active = f.state === filter;
-          return (
-            <Pressable
-              key={f.label}
-              onPress={() => setFilter(f.state)}
-              accessibilityRole="button"
-              accessibilityState={{ selected: active }}
-              style={{
-                paddingHorizontal: space.md,
-                paddingVertical: space.xs + 2,
-                borderRadius: radius.lg,
-                borderWidth: 1,
-                borderColor: active ? t.accent : t.border,
-                backgroundColor: active ? t.accent : 'transparent',
-              }}>
-              <Text style={{ color: active ? t.accentText : t.text, fontWeight: '600' }}>{f.label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      <PendingSync vaultId={id} />
 
-      {timeline.isPending ? <Loading /> : null}
-      <ErrorText error={timeline.error} />
-      {memories && memories.length === 0 ? (
-        <Empty title="Nothing here yet" hint="Capture a moment, then lock it to preserve it." />
+      <Field
+        label="Search"
+        value={query}
+        onChangeText={setQuery}
+        placeholder="Titles, thoughts, feelings, places"
+        autoCapitalize="none"
+        autoCorrect={false}
+        returnKeyType="search"
+        clearButtonMode="while-editing"
+      />
+
+      {debounced ? (
+        <View style={{ gap: space.sm }}>
+          {search.isPending ? <Loading /> : null}
+          <ErrorText error={search.error} />
+          {search.data && search.data.length === 0 ? <Body muted>No memories match “{debounced}”.</Body> : null}
+          {search.data?.map((m) => (
+            <MemoryCard key={m.id} memory={m} />
+          ))}
+        </View>
       ) : null}
-      {memories
-        ? byYear(memories).map(([year, inYear]) => (
-            <View key={year} style={{ gap: space.sm }}>
-              <Label>{year}</Label>
-              {inYear.map((m) => (
-                <MemoryCard key={m.id} memory={m} />
-              ))}
-            </View>
-          ))
-        : null}
-      {timeline.hasNextPage ? (
-        <Button
-          title="Load older memories"
-          variant="secondary"
-          onPress={() => void timeline.fetchNextPage()}
-          loading={timeline.isFetchingNextPage}
-        />
-      ) : null}
+
+      {debounced ? null : (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
+          {FILTERS.map((f) => {
+            const active = f.state === filter;
+            return (
+              <Pressable
+                key={f.label}
+                onPress={() => setFilter(f.state)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                style={{
+                  paddingHorizontal: space.md,
+                  paddingVertical: space.xs + 2,
+                  borderRadius: radius.lg,
+                  borderWidth: 1,
+                  borderColor: active ? t.accent : t.border,
+                  backgroundColor: active ? t.accent : 'transparent',
+                }}>
+                <Text
+                  style={{
+                    color: active ? t.accentText : t.text,
+                    fontWeight: '600',
+                  }}>
+                  {f.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+
+      {debounced ? null : (
+        <>
+          {timeline.isPending ? <Loading /> : null}
+          <ErrorText error={timeline.error} />
+          {memories && memories.length === 0 ? (
+            <Empty title="Nothing here yet" hint="Capture a moment, then lock it to preserve it." />
+          ) : null}
+          {memories
+            ? byYear(memories).map(([year, inYear]) => (
+                <View key={year} style={{ gap: space.sm }}>
+                  <Label>{year}</Label>
+                  {inYear.map((m) => (
+                    <MemoryCard key={m.id} memory={m} />
+                  ))}
+                </View>
+              ))
+            : null}
+          {timeline.hasNextPage ? (
+            <Button
+              title="Load older memories"
+              variant="secondary"
+              onPress={() => void timeline.fetchNextPage()}
+              loading={timeline.isFetchingNextPage}
+            />
+          ) : null}
+        </>
+      )}
+
+      <Button
+        title="Export this vault"
+        variant="secondary"
+        onPress={() => router.push({ pathname: '/vault/[id]/export', params: { id } })}
+      />
     </Screen>
   );
 }

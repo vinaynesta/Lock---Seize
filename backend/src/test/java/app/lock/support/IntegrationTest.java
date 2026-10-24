@@ -47,6 +47,12 @@ public abstract class IntegrationTest {
     @Autowired
     protected RateLimiter rateLimiter;
 
+    @Autowired
+    protected app.lock.outbox.OutboxDispatcher dispatcher;
+
+    @Autowired
+    protected app.lock.memory.MemoryService memories;
+
     @BeforeEach
     void resetClock() {
         clock.set(START);
@@ -86,6 +92,64 @@ public abstract class IntegrationTest {
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         java.util.List<String> ids = JsonPath.read(vaults, "$[?(@.type == 'PERSONAL')].id");
         return ids.getFirst();
+    }
+
+    /** Runs the outbox until it is empty, so asynchronous work (scans, thumbnails, exports) completes. */
+    protected void drainOutbox() {
+        while (dispatcher.dispatchBatch() > 0) {
+            // drain
+        }
+    }
+
+    /** Uploads bytes through the direct-upload flow; the asset is left PENDING_SCAN. */
+    protected String upload(TestUser user, String memoryId, String mimeType, byte[] bytes) throws Exception {
+        String body = """
+                {"type":"PHOTO","mimeType":"%s","sizeBytes":%d,"checksumSha256":"%s"}"""
+                .formatted(mimeType, bytes.length, InMemoryObjectStorage.sha256Base64(bytes));
+        String ticket = mvc.perform(json(post("/memories/" + memoryId + "/assets/upload"), body).with(user.auth()))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String assetId = read(ticket, "$.assetId");
+        String key = jdbc.queryForObject("SELECT object_key FROM memory_assets WHERE id = ?::uuid", String.class, assetId);
+        storage.put(key, bytes); // the client's direct upload
+        mvc.perform(post("/assets/" + assetId + "/complete").with(user.auth()))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.uploadStatus").value("PENDING_SCAN"));
+        return assetId;
+    }
+
+    /** Uploads a photo and runs the scan, so the asset is VERIFIED (usable) when this returns. */
+    protected String uploadPhoto(TestUser user, String memoryId, byte[] bytes) throws Exception {
+        String assetId = upload(user, memoryId, "image/jpeg", bytes);
+        drainOutbox();
+        return assetId;
+    }
+
+    protected String createMemory(TestUser user, String vaultId, String title) throws Exception {
+        return read(mvc.perform(json(post("/vaults/" + vaultId + "/memories"), """
+                        {"title":"%s","thought":"Nervous but excited"}""".formatted(title)).with(user.auth()))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
+    }
+
+    /** A shared vault owned by {@code owner} with every one of {@code others} as an active member. */
+    protected String sharedVault(TestUser owner, TestUser... others) throws Exception {
+        String vaultId = read(mvc.perform(json(post("/vaults"), """
+                        {"type":"SHARED","name":"Shared"}""").with(owner.auth()))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
+        for (TestUser other : others) {
+            mvc.perform(json(post("/vaults/" + vaultId + "/members"), """
+                            {"email":"%s"}""".formatted(other.email())).with(owner.auth()))
+                    .andExpect(status().isCreated());
+            mvc.perform(post("/invitations/" + vaultId + "/accept").with(other.auth())).andExpect(status().isOk());
+        }
+        return vaultId;
+    }
+
+    /** Locks and runs the cooling-off to completion. */
+    protected void lockNow(TestUser user, String memoryId) throws Exception {
+        mvc.perform(post("/memories/" + memoryId + "/lock").with(user.auth())).andExpect(status().isOk());
+        clock.advance(java.time.Duration.ofHours(25));
+        memories.completeDueSeals(100);
     }
 
     protected static MockHttpServletRequestBuilder json(MockHttpServletRequestBuilder builder, String body) {

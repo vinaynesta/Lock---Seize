@@ -24,6 +24,14 @@ interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID> {
     @Query("update RefreshToken t set t.revokedAt = :now where t.userId = :userId and t.revokedAt is null")
     int revokeAllForUser(UUID userId, Instant now);
 
+    /** The newest live token of each of the user's families: one per signed-in device. */
+    @Query(value = """
+            SELECT DISTINCT ON (family_id) * FROM refresh_tokens
+            WHERE user_id = :userId AND revoked_at IS NULL AND rotated_at IS NULL AND expires_at > :now
+            ORDER BY family_id, created_at DESC
+            """, nativeQuery = true)
+    java.util.List<RefreshToken> findActiveSessions(UUID userId, Instant now);
+
     @Modifying
     @Query("delete from RefreshToken t where t.expiresAt < :before")
     int deleteExpiredBefore(Instant before);

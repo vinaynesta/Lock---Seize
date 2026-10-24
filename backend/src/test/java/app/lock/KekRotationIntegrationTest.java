@@ -51,21 +51,21 @@ class KekRotationIntegrationTest extends IntegrationTest {
         clock.advance(Duration.ofHours(25));
         memoryService.completeDueSeals(100);
 
-        String currentKek = jdbc.queryForObject("SELECT kek_id FROM vaults WHERE id = ?::uuid", String.class, vaultId);
+        String currentKek = jdbc.queryForObject("SELECT kek_id FROM vault_keys WHERE vault_id = ?::uuid", String.class, vaultId);
         assertThat(currentKek).startsWith("local:");
         byte[] titleBefore = jdbc.queryForObject("SELECT title_ct FROM memories WHERE id = ?::uuid", byte[].class, memoryId);
-        byte[] keyBefore = jdbc.queryForObject("SELECT wrapped_key FROM vaults WHERE id = ?::uuid", byte[].class, vaultId);
+        byte[] keyBefore = jdbc.queryForObject("SELECT wrapped_key FROM vault_keys WHERE vault_id = ?::uuid", byte[].class, vaultId);
 
-        // Pretend the vault predates the current KEK (legacy row with no kek id).
-        jdbc.update("UPDATE vaults SET kek_id = NULL");
+        // Pretend the vault key predates the current KEK (legacy row with no kek id).
+        jdbc.update("UPDATE vault_keys SET kek_id = NULL");
         assertThat(registry.get("lock.vaults.kek.stale").gauge().value()).isGreaterThanOrEqualTo(1);
         while (rewrapper.rewrapBatch(50) > 0) { }
 
         assertThat(registry.get("lock.vaults.kek.stale").gauge().value()).isZero();
-        assertThat(jdbc.queryForObject("SELECT kek_id FROM vaults WHERE id = ?::uuid", String.class, vaultId)).isEqualTo(currentKek);
+        assertThat(jdbc.queryForObject("SELECT kek_id FROM vault_keys WHERE vault_id = ?::uuid", String.class, vaultId)).isEqualTo(currentKek);
         // The wrapped key bytes changed (fresh nonce), but memory ciphertext did not: no re-encryption,
         // so the immutability triggers and the integrity proof are unaffected.
-        assertThat(jdbc.queryForObject("SELECT wrapped_key FROM vaults WHERE id = ?::uuid", byte[].class, vaultId)).isNotEqualTo(keyBefore);
+        assertThat(jdbc.queryForObject("SELECT wrapped_key FROM vault_keys WHERE vault_id = ?::uuid", byte[].class, vaultId)).isNotEqualTo(keyBefore);
         assertThat(jdbc.queryForObject("SELECT title_ct FROM memories WHERE id = ?::uuid", byte[].class, memoryId)).isEqualTo(titleBefore);
         mvc.perform(get("/memories/" + memoryId).with(nia.auth())).andExpect(jsonPath("$.title").value("Survives rotation"));
         mvc.perform(get("/memories/" + memoryId + "/integrity").with(nia.auth())).andExpect(jsonPath("$.intact").value(true));

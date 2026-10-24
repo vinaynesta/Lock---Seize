@@ -13,6 +13,9 @@ public interface VaultMemberRepository extends JpaRepository<VaultMember, VaultM
     @Query("select m from VaultMember m where m.id.userId = :userId and m.status = :status")
     List<VaultMember> findByUserIdAndStatus(UUID userId, VaultMember.Status status);
 
+    @Query("select m from VaultMember m where m.id.userId = :userId")
+    List<VaultMember> findAllByUserId(UUID userId);
+
     @Query("select count(m) from VaultMember m where m.id.vaultId = :vaultId and m.status = app.lock.vault.VaultMember.Status.ACTIVE")
     long countActive(UUID vaultId);
 }

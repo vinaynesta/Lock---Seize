@@ -14,7 +14,10 @@ import java.util.UUID;
 @Table(name = "users")
 public class User {
 
-    public enum Status { ACTIVE, DISABLED }
+    /** DELETED: the account was deleted (roadmap 2.5) and the row anonymised; it is kept for attribution. */
+    public enum Status { ACTIVE, DISABLED, DELETED }
+
+    public static final String FORMER_MEMBER = "Former member";
 
     @Id
     private UUID id;
@@ -31,6 +34,9 @@ public class User {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Status status;
+
+    /** Storage plan (roadmap 3.2); null means the configured default. */
+    private String plan;
 
     @Version
     private long version;
@@ -53,8 +59,26 @@ public class User {
         this.updatedAt = now;
     }
 
+    /** Set by billing or an operator; there is no self-service endpoint. */
+    public void changePlan(String plan, Instant now) {
+        this.plan = plan;
+        this.updatedAt = now;
+    }
+
     void changePasswordHash(String newHash, Instant now) {
         this.passwordHash = newHash;
+        this.updatedAt = now;
+    }
+
+    /**
+     * Policy C: the row stays so shared memories and the audit trail keep a valid author, but nothing
+     * personal remains. The email is replaced so it can sign up again; the password can never match.
+     */
+    void anonymize(String unusablePasswordHash, Instant now) {
+        this.email = "deleted-" + id + "@deleted.invalid";
+        this.displayName = FORMER_MEMBER;
+        this.passwordHash = unusablePasswordHash;
+        this.status = Status.DELETED;
         this.updatedAt = now;
     }
 
@@ -63,5 +87,6 @@ public class User {
     public String getPasswordHash() { return passwordHash; }
     public String getDisplayName() { return displayName; }
     public Status getStatus() { return status; }
+    public String getPlan() { return plan; }
     public Instant getCreatedAt() { return createdAt; }
 }

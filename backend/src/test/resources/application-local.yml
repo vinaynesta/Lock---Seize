@@ -3,3 +3,5 @@ lock:
     type: memory
   memory:
     cooling-off: PT2M # short so the lock flow can be tried end to end
+  email:
+    log-body: true # reset links appear in the console

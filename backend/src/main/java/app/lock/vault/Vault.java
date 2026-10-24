@@ -1,6 +1,5 @@
 package app.lock.vault;
 
-import app.lock.crypto.ContentCipher;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -37,15 +36,9 @@ public class Vault {
     @Column(nullable = false)
     private State state;
 
-    /** Vault data key wrapped by the KEK. */
-    @Column(nullable = false)
-    private byte[] wrappedKey;
-
+    /** Current data-key version: new content is encrypted with it. The keys live in {@link VaultKey}. */
     @Column(nullable = false)
     private int keyVersion;
-
-    /** Which KEK wrapped {@link #wrappedKey}; null for keys wrapped before this was recorded. */
-    private String kekId;
 
     @Version
     private long version;
@@ -58,14 +51,12 @@ public class Vault {
 
     protected Vault() {}
 
-    Vault(Type type, String name, UUID ownerId, ContentCipher.WrappedKey key, Instant now) {
+    Vault(Type type, String name, UUID ownerId, Instant now) {
         this.id = UUID.randomUUID();
         this.type = type;
         this.name = name;
         this.ownerId = ownerId;
         this.state = State.ACTIVE;
-        this.wrappedKey = key.bytes();
-        this.kekId = key.kekId();
         this.keyVersion = 1;
         this.createdAt = now;
         this.updatedAt = now;
@@ -76,11 +67,11 @@ public class Vault {
         this.updatedAt = now;
     }
 
-    /** KEK rotation: same data key, wrapped by a different KEK. {@code keyVersion} does not change. */
-    void rewrapKey(ContentCipher.WrappedKey key, Instant now) {
-        this.wrappedKey = key.bytes();
-        this.kekId = key.kekId();
+    /** Vault-key rotation (roadmap 2.4): returns the new current version. */
+    int nextKeyVersion(Instant now) {
+        this.keyVersion++;
         this.updatedAt = now;
+        return keyVersion;
     }
 
     void markDormant(Instant now) {
@@ -93,7 +84,6 @@ public class Vault {
     public String getName() { return name; }
     public UUID getOwnerId() { return ownerId; }
     public State getState() { return state; }
-    public ContentCipher.WrappedKey getWrappedKey() { return new ContentCipher.WrappedKey(wrappedKey, kekId); }
     public int getKeyVersion() { return keyVersion; }
     public Instant getCreatedAt() { return createdAt; }
 }

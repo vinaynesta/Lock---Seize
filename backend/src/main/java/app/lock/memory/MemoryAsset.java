@@ -17,8 +17,11 @@ public class MemoryAsset {
 
     public enum Type { PHOTO, VIDEO, AUDIO }
 
-    /** INITIATED → VERIFIED → ATTACHED, with VERIFICATION_FAILED and EXPIRED as failure exits. */
-    public enum UploadStatus { INITIATED, VERIFIED, VERIFICATION_FAILED, ATTACHED, EXPIRED }
+    /**
+     * INITIATED → PENDING_SCAN → VERIFIED → ATTACHED. Failure exits: VERIFICATION_FAILED (size or
+     * checksum mismatch), REJECTED (malware, roadmap 2.2) and EXPIRED (never uploaded).
+     */
+    public enum UploadStatus { INITIATED, PENDING_SCAN, VERIFIED, VERIFICATION_FAILED, REJECTED, ATTACHED, EXPIRED }
 
     @Id
     private UUID id;
@@ -57,7 +60,18 @@ public class MemoryAsset {
 
     private Instant verifiedAt;
 
+    private Instant scannedAt;
+
+    /** When the original was tagged for the cold tier (roadmap 3.3). Not content: may change after locking. */
+    private Instant archivedAt;
+
     protected MemoryAsset() {}
+
+    public void markArchived(Instant now) {
+        this.archivedAt = now;
+    }
+
+    public Instant getArchivedAt() { return archivedAt; }
 
     public MemoryAsset(UUID id, UUID memoryId, String objectKey, Type assetType, String mimeType, long sizeBytes,
                        String checksumSha256, String encryptionMetadata, Instant now) {
@@ -73,9 +87,21 @@ public class MemoryAsset {
         this.createdAt = now;
     }
 
-    public void markVerified(Instant now) {
-        this.uploadStatus = UploadStatus.VERIFIED;
+    /** Size and checksum match; the bytes now wait for the malware scan. */
+    public void markPendingScan(Instant now) {
+        this.uploadStatus = UploadStatus.PENDING_SCAN;
         this.verifiedAt = now;
+    }
+
+    /** Scanned clean: usable, and the memory can lock. */
+    public void markScannedClean(Instant now) {
+        this.uploadStatus = UploadStatus.VERIFIED;
+        this.scannedAt = now;
+    }
+
+    public void markRejected(Instant now) {
+        this.uploadStatus = UploadStatus.REJECTED;
+        this.scannedAt = now;
     }
 
     public void markVerificationFailed() {
@@ -105,4 +131,5 @@ public class MemoryAsset {
     public String getEncryptionMetadata() { return encryptionMetadata; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getVerifiedAt() { return verifiedAt; }
+    public Instant getScannedAt() { return scannedAt; }
 }
