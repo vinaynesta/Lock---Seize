@@ -1,6 +1,10 @@
 package app.lock.media.storage;
 
 import app.lock.config.LockProperties;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.net.URI;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -26,6 +30,7 @@ public class InMemoryObjectStorage implements ObjectStorage {
 
     private final Map<String, byte[]> objects = new ConcurrentHashMap<>();
     private final Map<String, Instant> retention = new ConcurrentHashMap<>();
+    private final java.util.Set<String> cold = ConcurrentHashMap.newKeySet();
     private final LockProperties.Storage props;
     private final Clock clock;
 
@@ -45,6 +50,10 @@ public class InMemoryObjectStorage implements ObjectStorage {
 
     public Optional<byte[]> get(String key) {
         return Optional.ofNullable(objects.get(key)).map(byte[]::clone);
+    }
+
+    public boolean isMarkedCold(String key) {
+        return cold.contains(key);
     }
 
     public Optional<Instant> retentionOf(String key) {
@@ -78,14 +87,49 @@ public class InMemoryObjectStorage implements ObjectStorage {
     }
 
     @Override
+    public InputStream read(String key) {
+        byte[] bytes = objects.get(key);
+        if (bytes == null) {
+            throw new IllegalStateException("No object at " + key);
+        }
+        return new ByteArrayInputStream(bytes);
+    }
+
+    @Override
+    public void write(String key, InputStream bytes, long sizeBytes, String contentType) {
+        try {
+            objects.put(key, bytes.readAllBytes());
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    @Override
+    public void quarantine(String key) {
+        byte[] bytes = objects.remove(key);
+        if (bytes != null) {
+            objects.put(QUARANTINE_PREFIX + key, bytes);
+        }
+    }
+
+    @Override
     public void protect(String key, Instant retainUntil) {
         retention.put(key, retainUntil);
+    }
+
+    @Override
+    public void markCold(String key) {
+        if (!objects.containsKey(key)) {
+            throw new IllegalStateException("No object at " + key);
+        }
+        cold.add(key);
     }
 
     @Override
     public void delete(String key) {
         objects.remove(key);
         retention.remove(key);
+        cold.remove(key);
     }
 
     /** Absolute URL on this server when called within a request; a relative path otherwise (tests). */

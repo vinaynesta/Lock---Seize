@@ -36,7 +36,7 @@ export default function Relive() {
         You locked this memory {timeAgo(daysSinceLocked)}.
       </Body>
 
-      <AssetGallery assets={m.assets} />
+      <AssetGallery assets={m.assets} variant="PREVIEW" />
 
       <View style={{ gap: space.sm }}>
         <Title>{m.title}</Title>

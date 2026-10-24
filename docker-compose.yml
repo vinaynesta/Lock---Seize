@@ -38,8 +38,18 @@ services:
       /bin/sh -c "
       mc alias set local http://minio:9000 lock lock-secret &&
       mc mb --ignore-existing --with-lock local/lock-media &&
+      mc ilm rule add --prefix exports/ --expire-days 8 local/lock-media || true &&
       echo 'bucket ready'
       "
+
+  # Malware scanning for uploads (roadmap 2.2). Set LOCK_SCAN_PROVIDER=clamav to use it.
+  # The first start downloads virus definitions and takes a few minutes. deploy/clamd.conf raises
+  # StreamMaxLength to cover a 2 GB video (F3); production must use the same limits.
+  clamav:
+    image: clamav/clamav:1.4.3
+    profiles: ["scan", "app"]
+    ports: ["3310:3310"]
+    volumes: ["./deploy/clamd.conf:/etc/clamav/clamd.conf:ro"]
 
   api:
     profiles: ["app"]
@@ -53,6 +63,9 @@ services:
       LOCK_DB_URL: jdbc:postgresql://postgres:5432/lock
       LOCK_S3_ENDPOINT: http://minio:9000
       LOCK_OBJECT_LOCK_YEARS: "100"
+      LOCK_SCAN_PROVIDER: clamav
+      LOCK_CLAMAV_HOST: clamav
+      LOCK_TRANSCODE_PROVIDER: ffmpeg
     ports: ["8080:8080"]
 
 volumes:

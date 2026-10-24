@@ -20,7 +20,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  */
 public class AuthRateLimitFilter extends OncePerRequestFilter {
 
-    private static final Set<String> LIMITED = Set.of("/auth/login", "/auth/register", "/auth/refresh", "/auth/logout");
+    private static final Set<String> LIMITED = Set.of("/auth/login", "/auth/register", "/auth/refresh", "/auth/logout",
+            "/auth/password-reset", "/auth/password-reset/confirm", "/auth/login/mfa");
     private static final Duration WINDOW = Duration.ofMinutes(1);
 
     private final RateLimiter limiter;

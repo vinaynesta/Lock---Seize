@@ -7,7 +7,7 @@ Before starting a feature, re-read its entry. After finishing one, tick it off a
 - Design reference: [`Lock_High_Level_Detailed_System_Design.md`](Lock_High_Level_Detailed_System_Design.md)
 - Decisions already taken: [`decisions.md`](decisions.md)
 
-_Last reviewed: 2026-10-17_
+_Last reviewed: 2026-10-24_
 
 ---
 
@@ -58,20 +58,21 @@ _Last reviewed: 2026-10-17_
 | 1.4 | Production key management (KMS for the KEK) | P1 | M | — | ✅ |
 | 1.5 | Observability baseline | P1 | S | — | ✅ |
 | 1.6 | Timeline pagination (cursor) and an export without the 200 cap | P1 | S | — | ✅ |
-| 2.1 | Media processing worker: thumbnails | P2 | L | 1.3 | ☐ |
-| 2.2 | Malware scanning of uploads | P2 | M | 2.1 | ☐ |
-| 2.3 | Full ZIP export with original media | P2 | M | 1.6, 2.1 worker seam | ☐ |
-| 2.4 | Vault-key rotation on member removal | P2 | L | 1.4 | ☐ |
-| 2.5 | Account deletion | P2 | M | **legal decision** | ☐ |
-| 2.6 | Password reset by email | P2 | M | 1.2 | ☐ |
-| 2.7 | Push notifications (on this day, capsule reveal, invites) | P2 | M | outbox | ☐ |
-| 2.8 | Video/audio transcoding for playback | P2 | L | 2.1 | ☐ |
-| 3.1 | MFA (TOTP) | P3 | M | 1.1 | ☐ |
-| 3.2 | Storage quotas per plan | P3 | M | — | ☐ |
-| 3.3 | Cold-tier archival of old media | P3 | M | 3.2 | ☐ |
-| 3.4 | Search over memories | P3 | L | — | ☐ |
-| 3.5 | Offline drafts and background upload (client) | P3 | L | — | ☐ |
-| 3.6 | Sealed Vault (end-to-end encryption tier) | P3 | XL | 2.4, recovery decision | ☐ |
+| 2.1 | Media processing worker: thumbnails | P2 | L | 1.3 | ✅ |
+| 2.2 | Malware scanning of uploads | P2 | M | 2.1 | ✅ |
+| 2.3 | Full ZIP export with original media | P2 | M | 1.6, 2.1 worker seam | ✅ |
+| 2.4 | Vault-key rotation on member removal | P2 | L | 1.4 | ✅ |
+| 2.5 | Account deletion | P2 | M | Policy C chosen | ✅ |
+| 2.6 | Password reset by email | P2 | M | 1.2 | ✅ |
+| 2.7 | Push notifications (on this day, capsule reveal, invites) | P2 | M | outbox | ✅ |
+
+| 2.8 | Video/audio transcoding for playback | P2 | L | 2.1 | ✅ |
+| 3.1 | MFA (TOTP) | P3 | M | 1.1 | ✅ |
+| 3.2 | Storage quotas per plan | P3 | M | — | ✅ |
+| 3.3 | Cold-tier archival of old media | P3 | M | 3.2 | ✅ |items 
+| 3.4 | Search over memories | P3 | L | — | ✅ |
+| 3.5 | Offline drafts and background upload (client) | P3 | L | — | ✅ |
+| 3.6 | Sealed Vault (end-to-end encryption tier) | P3 | XL | 2.4, recovery decision | ⚠ design written, blocked on recovery decision |
 
 **Rough totals.** P0 ≈ 2 days · P1 ≈ 3–4 weeks · P2 ≈ 8–10 weeks · P3 is open-ended.
 
@@ -213,14 +214,35 @@ _Last reviewed: 2026-10-17_
 - Derivatives are *not* part of the integrity proof and *not* object-locked (they can be regenerated).
 - Keep the worker in-process for now, behind an interface, so it can move to a separate service or queue later.
 
+> ✅ Done 2026-10-23. `media/AssetProcessor` handles `asset.scanned_clean` from the outbox and writes JPEG derivatives (THUMB 256 px, PREVIEW 1024 px) under `derived/<original key>/`, recorded in `asset_derivatives` (`V4`). As built:
+> - JPEG, not WebP: the JDK has no WebP encoder and adding a native one wasn't worth it yet. Re-encoding drops all EXIF (so GPS too), and the EXIF orientation is applied first so phone photos are upright.
+> - `GET /assets/{id}/download?variant=thumb|preview` returns the derivative, or the original if there is none (the response's `variant` says which). Asset views list the available `variants`.
+> - Derivatives are not in the integrity proof, not object-locked, can be written after locking, and are deleted with their original.
+> - A 30-minute backfill job covers photos uploaded before 2.1. The client grid uses THUMB; Relive uses PREVIEW; tapping opens the original.
+> - **Not done:** HEIC/HEIF and WebP originals get no thumbnail (ImageIO can't read them), so they fall back to the original. Most iPhone photos arrive as JPEG through the picker, but this needs a decoder before launch if HEIC uploads are common.
+
 ### 2.2 Malware scanning · M
 - ClamAV sidecar (or a cloud scanning API). Uploads stay `PENDING_SCAN` until clean. Infected files are quarantined, and the asset is marked `REJECTED` and reported to the owner.
 - This decides whether memories with unscanned assets can be locked. Recommendation: block locking until every asset is scanned.
+
+> ✅ Done 2026-10-23. Decision: **block locking until every asset is scanned clean** (decisions §16). As built:
+> - `complete` now moves a verified upload to `PENDING_SCAN` and publishes `asset.verified`. `AssetProcessor` streams it to the scanner outside any transaction, then commits the verdict: `VERIFIED` (usable) or `REJECTED` with the bytes moved to `quarantine/` and an `ASSET_REJECTED` audit event naming the signature.
+> - `ClamAvScanner` speaks clamd's INSTREAM protocol (`LOCK_SCAN_PROVIDER=clamav`). `DevMalwareScanner` only detects the EICAR test file and is the default; the `prod` profile refuses to start with it.
+> - A scanner outage leaves assets pending, never "clean": the outbox retries, and a 5-minute sweep picks up anything it gave up on. Metrics: `lock.scan.pending`, `lock.uploads.rejected`.
+> - Existing `VERIFIED` draft assets are sent back through the scan by `V4`.
+> - **Still to do (infrastructure):** run clamd with `StreamMaxLength` ≥ 2 GB (the compose file has a `scan` profile), and alert on `lock.scan.pending` growing. A user notification for rejected files is 2.7; today the memory screen shows it.
 
 ### 2.3 Full ZIP export with original media · M
 **Why.** Today's export is JSON only. It is the follow-up named in decisions §13 and a key trust feature for a permanence app.
 - `POST /vaults/{id}/exports` starts an async job (outbox). The worker builds the ZIP (manifest JSON + original media + integrity hashes) in storage. The user gets a short-lived download URL and a notification (2.7).
 - Export jobs are audited. Only one active export per user per vault. The ZIP expires after 7 days.
+
+> ✅ Done 2026-10-23. `export/ExportService` (`V5__vault_exports.sql`). As built:
+> - `POST /vaults/{id}/exports` queues a job (one `QUEUED` per user per vault, enforced by a partial unique index); the outbox worker writes `manifest.json` (`lock-export/v2`: memories, reflections, content hashes, per-file SHA-256 and path) and `media/<memoryId>/<assetId>.<ext>` into a temp file, streaming page by page, then stores it under `exports/`.
+> - Exports contain exactly what the requester can see (their own drafts, no unopened capsules or rejected files). Only the requester can see or download one, and only while still a member. The temp file is always deleted.
+> - Audited: `EXPORT_REQUESTED`, `EXPORT_COMPLETED`, `EXPORT_FAILED`, `EXPORT_DOWNLOADED`. An hourly job deletes archives after 7 days and fails exports stuck for 6 hours.
+> - Client: "Export this vault" on the timeline opens a screen that polls and offers the download.
+> - **Not done:** the "ready" notification (2.7; `export.ready` is already published). Archives are not encrypted beyond storage SSE, so the bucket's `exports/` prefix should get a lifecycle rule as a backstop.
 
 ### 2.4 Vault-key rotation on member removal · L
 **Why.** A removed member who kept the old vault key could decrypt content they obtain later (design §22). The gap is known and listed as "still open".
@@ -228,22 +250,63 @@ _Last reviewed: 2026-10-17_
 - Removing a member (or a member leaving) creates a new key version. New content uses the new version.
 - Old locked content stays under the old version, because re-encrypting would conflict with the immutability triggers and the integrity hashes. Document this trade-off in `decisions.md` before building.
 
+> ✅ Done 2026-10-23. Trade-off recorded in decisions §15. As built:
+> - `V6__vault_key_versions.sql` moves wrapped keys into `vault_keys(vault_id, version, wrapped_key, kek_id)` and adds `memory_reflections.key_version`. `vaults.key_version` is the current version.
+> - Removing an **active** member, a member leaving (unless they were the last), or a member's account being deleted adds a version (`VAULT_KEY_ROTATED` audit event). Revoking an invitation does not: the invitee never had the key.
+> - New memories and reflections use the current version; each is decrypted with its own. A draft is re-encrypted under the current key when next edited. Locked ciphertext is never touched (tested byte for byte, and the integrity proof still holds).
+> - KEK rotation (1.4) now re-wraps every key version (`lock.vaults.kek.stale` counts versions).
+
 ### 2.5 Account deletion · M · ⚠ blocked
 **Blocked on** a product/legal decision between policies A, B and C (design doc §41). Also needed for GDPR/CCPA.
 - Recommended starting point is **Policy C**: personal vaults are purged through the existing deletion-request path (30-day grace). In shared vaults, the user's contributions stay, attributed to a "former member".
 - Record the decision in `decisions.md` first. Then reuse the `DeletionRequest` + purge job machinery.
 
+> ✅ Done 2026-10-23 with **Policy C** (decisions §14). As built:
+> - `POST /account/deletion-request` (password required, shares the re-auth lockout), `GET` to see it, `DELETE` to cancel. It runs after 30 days (`lock.account.deletion-grace-period`) in `account/AccountService`, one account per transaction, claimed with `SKIP LOCKED`.
+> - On execution: personal vaults and all their memories are purged through the same trigger-bypass purge path as single deletions; the user leaves every shared vault (with key rotation, or DORMANT if last); their shared-vault drafts are purged; their exports are deleted; the user row is anonymised (`DELETED`, "Former member", random unusable password) and all sessions revoked. Media is removed by the outbox. `ACCOUNT_DELETED` stays on the audit trail.
+> - Member lists now return `displayName`, so remaining members see "Former member".
+> - Client: Settings → "Delete account" explains what happens and allows cancelling.
+> - **Still open:** legal sign-off on Policy C (decisions "Still open"); reminder notifications at 7 and 1 days (2.7; `account.deletion.requested` is already published).
+
 ### 2.6 Password reset by email · M
 - Email provider seam (SES/Postmark), single-use reset token (hashed, 30 min), revokes all refresh tokens.
 - Content is unaffected because vault keys are wrapped by the KEK, not the password (decisions §2). This only works under server-side encryption. Sealed Vault (3.6) needs a different recovery model.
 
+> ✅ Done 2026-10-24 (decisions §18). `POST /auth/password-reset` always answers 202 (no account
+> enumeration; 3 requests per email per hour); `POST /auth/password-reset/confirm` sets the password,
+> revokes every session and clears the login lockout. Tokens are single-use, 30 minutes, newest-only,
+> stored as SHA-256; the raw token is an HMAC of the row id, so it never sits in the outbox. A signed-in
+> password change also kills outstanding links. Email goes through an `EmailSender` seam: `log` (dev)
+> or `postmark`; the `prod` profile refuses `log`. Client: "Forgot your password?" on sign-in and a
+> `/reset-password?token=` screen.
+
 ### 2.7 Push notifications · M
 - Expo push tokens per device (`devices` table, design §23).
 - Events through the outbox: memory sealed, time capsule revealed, "on this day", vault invitation, deletion request about to execute (reminders at 7 days and 1 day). That last one is a safety feature.
+- Also consume the events 2.2, 2.3 and 2.5 already publish: `asset.rejected` (a file failed the malware scan), `export.ready` (ZIP is downloadable) and `account.deletion.requested` (reminders at 7 days and 1 day before the account is deleted).
 - Users can choose which notifications they get.
+
+> ✅ Done 2026-10-24 (decisions §19). `devices` (Expo push tokens, moved to the newest account on
+> re-registration), `notification_preferences` (opt-outs; deletion reminders cannot be turned off) and
+> a `notifications` queue with dedupe keys and scheduled `send_at`. `NotificationEventHandler` turns
+> outbox events into notifications: memory locked, capsule opened (scheduled for `revealAt`, sent to
+> whoever is a member then), vault invitation, asset rejected, export ready, and deletion reminders at
+> 7 and 1 days for memories and the account (cancelled with the request). Daily "On this day" job at
+> 09:00 UTC. Texts are generic: no memory content ever goes to a push provider. Sender seam: `log` or
+> `expo`; dead tokens are dropped. Client: registers on sign-in (native), unregisters on sign-out,
+> opens the right screen on tap, Settings → Notifications.
 
 ### 2.8 Video/audio transcoding · L
 - HLS/MP4 renditions for playback, generated by the 2.1 worker. Same rules as thumbnails: originals untouched, renditions can be regenerated.
+
+> ✅ Done 2026-10-24 (decisions §17, updated). A `PLAYBACK` derivative: H.264/AAC MP4, at most
+> 1280 px, never upscaled, `+faststart`, metadata stripped. Audio gets AAC in MP4. Videos also get
+> THUMB/PREVIEW from a still frame. Runs `ffmpeg` behind a `MediaTranscoder` seam
+> (`LOCK_TRANSCODE_PROVIDER=ffmpeg`; the Docker image ships it), on temp files so a 2 GB video never
+> sits in memory, with a timeout and `-protocol_whitelist file`. A file ffmpeg can't read falls back
+> to the original; the memory can still lock. Progressive MP4 rather than HLS: one file plays on every
+> phone and browser, and adaptive bitrate is not worth the complexity at these sizes. Tested against
+> the real ffmpeg (`FfmpegTranscoderTest`, CI installs it). Same worker also does F7.
 
 ---
 
@@ -258,17 +321,70 @@ _Last reviewed: 2026-10-17_
 | 3.5 | **Offline drafts + background upload** · L | Local draft storage and a resumable upload queue in the client. |
 | 3.6 | **Sealed Vault (E2E)** · XL | Premium tier. Needs a recovery-model decision (design §21) and 2.4 versioned keys. Server-side features (thumbnails, integrity re-check of plaintext, search) degrade. Write a design doc before estimating. |
 
+**P3 status (2026-10-24)**
+
+- ✅ **3.1 MFA.** TOTP (RFC 6238; secret wrapped by the KEK; each 30-second step accepted once) and
+  10 single-use recovery codes. With MFA on, login returns an `mfaToken` (an HMAC ticket valid 5
+  minutes, deliberately not a JWT) to send with a code to `POST /auth/login/mfa`. Deletion requests
+  (memory and account) and both exports need the code in an `X-MFA-Code` header. Wrong codes share
+  the lockout. Endpoints under `/account/mfa`. Client: two-step sign-in, Settings → Two-step
+  verification, code field on the sensitive screens.
+- ✅ **3.2 Storage quotas.** Plans in `lock.quota.plans` (free 5 GB, plus 200 GB, premium 2 TB),
+  `users.plan` (null = default). Usage is the bytes of original media in memories the user created,
+  including in-flight uploads, so parallel presigns can't overshoot. Enforced at presign (`413
+  QUOTA_EXCEEDED`). Nothing preserved is ever touched when over quota. `GET /account/storage` and a
+  meter in Settings. No self-service plan change (billing is out of scope).
+- ✅ **3.3 Cold tier.** A job tags originals of memories locked over a year ago (`lock-tier=cold`); a
+  bucket lifecycle rule (`deploy/s3-lifecycle.json`) moves them to Glacier Instant Retrieval, so Relive
+  never waits on a restore. Tagging keeps the object version, retention and checksum. Derivatives
+  stay hot. Sealed capsules wait until they have opened. V13 lets the asset trigger accept changes to
+  `archived_at` only. Off by default (`LOCK_COLD_TIER_ENABLED`).
+- ✅ **3.4 Search.** A per-vault blind index (decisions §21): HMAC tokens of normalised words and
+  prefixes, under a key derived from the vault key version. `GET /vaults/{id}/search?q=`. AND across
+  words, case and accent-insensitive, prefix of 3+ letters. Same visibility as the timeline; sealed
+  capsules don't match until they open. Backfill job for older memories. Client: search box on the
+  vault screen.
+- ✅ **3.5 Offline drafts + background upload.** Client queue persisted on the device
+  (`lib/offlineQueue.ts`): drafts created offline (fixed Idempotency-Key, so a retry can't
+  duplicate), and every native upload copied into app storage and sent with the native uploader
+  (streamed from disk). Drains on launch and when connectivity returns; permanent failures stay
+  visible with Retry/Remove. Native only; web uploads go straight through.
+- ⚠ **3.6 Sealed Vault.** Design note written: [`sealed-vault-design.md`](sealed-vault-design.md).
+  Recommends a recovery phrase plus device-to-device approval; lists what degrades and an XL
+  estimate split into pieces. **Blocked** on the recovery-model decision (open decisions below).
+
+---
+
+## Follow-ups from finished work
+
+Loose ends left by features marked ✅ above. Tick them off here; they are not tracked anywhere else.
+
+| # | Task | From | Type | Before | Status |
+|---|---|---|---|---|---|
+| F1 | Enable branch protection on `main` requiring the `backend` and `client` CI checks | 0.2 | Manual (GitHub settings) | Now | ☐ needs a repo admin |
+| F2 | Test `ClamAvScanner` against a real clamd: clean file, EICAR file, clamd stopped (asset must stay `PENDING_SCAN`) | 2.2 | Verification | Beta | ✅ `RealClamdIntegrationTest` (real clamd 1.4, runs when one answers on `LOCK_IT_CLAMD_PORT`) + `ClamdDownIntegrationTest` (always runs) |
+| F3 | Raise clamd `StreamMaxLength` to ≥ 2 GB in production. Alert on `lock.scan.pending` growing | 2.2 | Infrastructure | Beta | ◐ `deploy/clamd.conf` (2100M, mounted by compose). Still to do: use it in production and add the alert |
+| F4 | Set `LOCK_SCAN_PROVIDER=clamav` in every `prod` deployment; the prod profile refuses to start without it | 2.2 | Infrastructure | Beta | ◐ enforced by `ProductionSecretsGuard`; set it in each deployment (checklist in `deploy/README.md`) |
+| F5 | Test the `S3ObjectStorage` calls (`read`, `write`, `quarantine`, deleting a missing derivative key, object lock) against MinIO | 2.1–2.3 | Verification | Beta | ✅ `S3ObjectStorageMinioTest` (runs when MinIO answers on `LOCK_IT_S3_ENDPOINT`), incl. signed-checksum rejection, governance retention and cold-tier tagging |
+| F6 | Bucket lifecycle rule expiring `exports/` after ~8 days | 2.3 | Infrastructure | Beta | ◐ `deploy/s3-lifecycle.json`; applied to local MinIO by compose. Apply to the production bucket |
+| F7 | Thumbnails for HEIC/HEIF and WebP originals | 2.1 | Feature · S–M | Launch | ✅ decoded by the 2.8 transcoder (ffmpeg) |
+| F8 | Legal sign-off that Policy C satisfies erasure requests. If counsel wants Policy A, also purge the user's locked memories in shared vaults (decisions §14) | 2.5 | Decision (legal) | Launch | ☐ needs counsel |
+| F9 | Store `user_agent` per refresh token, and add a client test runner for the token-refresh logic | 1.1 | Feature · S | Launch | ✅ V15 + `GET /auth/sessions`; Jest (`jest-expo`) with `src/api/__tests__/client.test.ts`, run in CI |
+
+Notifications for rejected files, ready exports and account-deletion reminders are part of 2.7, not listed here.
+
 ---
 
 ## Open decisions (resolve before the blocked work)
 
 | Decision | Blocks | Owner |
 |---|---|---|
-| Account deletion policy (A/B/C, design §41) | 2.5 | Product + legal |
-| Can memories lock before malware scan completes? | 2.2 | Product |
-| Old content stays on old key version after member removal? | 2.4 | Engineering (record in decisions.md) |
-| Recovery model for Sealed Vault | 3.6 | Product + security |
-| ShedLock vs `SKIP LOCKED` for the outbox | 1.3 | Engineering |
+| ~~Account deletion policy (A/B/C, design §41)~~ Policy C, pending legal sign-off | 2.5 | Product + legal |
+| ~~Can memories lock before malware scan completes?~~ No | 2.2 | Product |
+| ~~Old content stays on old key version after member removal?~~ Yes (decisions §15) | 2.4 | Engineering |
+| Recovery model for Sealed Vault (options and recommendation in `sealed-vault-design.md` §2) | 3.6 | Product + security |
+| Sealed Vault: malware policy, web support, pricing (`sealed-vault-design.md` §6) | 3.6 | Product |
+| ~~ShedLock vs `SKIP LOCKED` for the outbox~~ `SKIP LOCKED` | 1.3 | Engineering |
 
 ---
 
@@ -280,3 +396,7 @@ _Last reviewed: 2026-10-17_
 | 2026-10-17 | Done: 0.1, 0.2 (branch protection still manual), 1.1, and the export half of 1.6. |
 | 2026-10-17 | Done: 1.2, 1.3, 1.6, and the 1.4 prod startup guard. Next: 1.5 observability, then 1.4 KMS. |
 | 2026-10-17 | Done: 1.4 (KMS + KEK rotation) and 1.5. **All of P1 is done.** Next: P2, starting with 2.1 thumbnails. |
+| 2026-10-23 | Restored 0.1 and 0.2 on `main` (the PR #2 squash merge had dropped them: `backend/target/` was tracked again, `ci.yml` was missing, `mvnw` lost its executable bit). Also restored the dev-default constants in `ProductionSecretsGuard`, which PR #3 had blanked, so the prod guard works again. |
+| 2026-10-23 | Done: 2.1, 2.2, 2.3, 2.4, 2.5 (Policy C). Next: 2.6 password reset. |
+| 2026-10-23 | Added "Follow-ups from finished work" (F1–F9) so loose ends from finished features are tracked; widened 2.7 to cover the events 2.2/2.3/2.5 publish. |
+| 2026-10-24 | Done: 2.6, 2.7, 2.8 (**all of P2**), 3.1–3.5, F2, F5, F7, F9. Partly: F3, F4, F6 (config written, needs applying in production). Open: 3.6 (design written, waits on the recovery decision), F1 (GitHub admin), F8 (legal). |

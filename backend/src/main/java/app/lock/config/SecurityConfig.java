@@ -39,7 +39,8 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/auth/register", "/auth/login", "/auth/refresh", "/auth/logout").permitAll()
+                        .requestMatchers("/auth/register", "/auth/login", "/auth/refresh", "/auth/logout",
+                                "/auth/password-reset", "/auth/password-reset/confirm", "/auth/login/mfa").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Metrics are for operators, not app users: never served on the public port.
                         // Scrape them on the private management port (LOCK_MANAGEMENT_PORT) instead.
@@ -55,14 +56,15 @@ public class SecurityConfig {
     }
 
     /**
-     * Refresh and logout authenticate with the refresh token in the body. Ignore any Authorization
-     * header there, so a stale access token cannot turn them into a 401.
+     * Refresh, logout and password reset authenticate with a token in the body. Ignore any
+     * Authorization header there, so a stale access token cannot turn them into a 401.
      */
     private static BearerTokenResolver bearerTokenResolver() {
         DefaultBearerTokenResolver standard = new DefaultBearerTokenResolver();
         return request -> {
             String path = request.getRequestURI().substring(request.getContextPath().length());
-            return path.equals("/auth/refresh") || path.equals("/auth/logout") ? null : standard.resolve(request);
+            return path.equals("/auth/refresh") || path.equals("/auth/logout") || path.startsWith("/auth/password-reset")
+                    ? null : standard.resolve(request);
         };
     }
 
@@ -71,7 +73,7 @@ public class SecurityConfig {
         CorsConfiguration cors = new CorsConfiguration();
         cors.setAllowedOrigins(props.corsAllowedOrigins() == null ? List.of() : props.corsAllowedOrigins());
         cors.setAllowedMethods(List.of("GET", "POST", "PATCH", "DELETE", "OPTIONS"));
-        cors.setAllowedHeaders(List.of("Authorization", "Content-Type", "Idempotency-Key", "Accept"));
+        cors.setAllowedHeaders(List.of("Authorization", "Content-Type", "Idempotency-Key", "Accept", "X-MFA-Code"));
         cors.setExposedHeaders(List.of(MemoryController.NEXT_CURSOR, "Retry-After"));
         cors.setMaxAge(3600L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

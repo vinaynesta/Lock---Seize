@@ -3,8 +3,6 @@ package app.lock.vault;
 import app.lock.crypto.ContentCipher;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
-import java.time.Clock;
-import java.time.Instant;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,25 +24,22 @@ public class VaultKeyRewrapper {
     private static final Logger log = LoggerFactory.getLogger(VaultKeyRewrapper.class);
     private static final int BATCH = 100;
 
-    private final VaultRepository vaults;
+    private final VaultKeyRepository keys;
     private final ContentCipher cipher;
-    private final Clock clock;
 
-    public VaultKeyRewrapper(VaultRepository vaults, ContentCipher cipher, MeterRegistry registry, Clock clock) {
-        this.vaults = vaults;
+    public VaultKeyRewrapper(VaultKeyRepository keys, ContentCipher cipher, MeterRegistry registry) {
+        this.keys = keys;
         this.cipher = cipher;
-        this.clock = clock;
-        Gauge.builder("lock.vaults.kek.stale", () -> vaults.countNotWrappedBy(cipher.currentKekId()))
-                .description("Vaults whose data key is not yet wrapped by the current KEK").register(registry);
+        Gauge.builder("lock.vaults.kek.stale", () -> keys.countNotWrappedBy(cipher.currentKekId()))
+                .description("Vault key versions not yet wrapped by the current KEK").register(registry);
     }
 
-    /** Re-wraps up to {@code batchSize} vault keys. Safe on several instances (SKIP LOCKED). */
+    /** Re-wraps up to {@code batchSize} vault key versions. Safe on several instances (SKIP LOCKED). */
     @Transactional
     public int rewrapBatch(int batchSize) {
-        List<Vault> stale = vaults.lockNotWrappedBy(cipher.currentKekId(), batchSize);
-        Instant now = Instant.now(clock);
-        for (Vault vault : stale) {
-            vault.rewrapKey(cipher.rewrap(vault.getWrappedKey()), now);
+        List<VaultKey> stale = keys.lockNotWrappedBy(cipher.currentKekId(), batchSize);
+        for (VaultKey key : stale) {
+            key.rewrap(cipher.rewrap(key.getWrappedKey()));
         }
         return stale.size();
     }

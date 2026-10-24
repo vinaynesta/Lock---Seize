@@ -1,6 +1,7 @@
 package app.lock.memory;
 
 import app.lock.common.CurrentUser;
+import app.lock.identity.MfaController;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -133,13 +135,22 @@ public class MemoryController {
     @PostMapping("/memories/{memoryId}/deletion-request")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public MemoryService.DeletionView requestDeletion(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID memoryId,
-                                                      @Valid @RequestBody DeletionRequestBody req) {
-        return memories.requestDeletion(memoryId, CurrentUser.id(jwt), req.password(), req.reason());
+                                                      @Valid @RequestBody DeletionRequestBody req,
+                                                      @RequestHeader(name = MfaController.HEADER, required = false) String mfaCode) {
+        return memories.requestDeletion(memoryId, CurrentUser.id(jwt), req.password(), mfaCode, req.reason());
     }
 
     @DeleteMapping("/memories/{memoryId}/deletion-request")
     public MemoryService.DeletionView cancelDeletion(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID memoryId) {
         return memories.cancelDeletion(memoryId, CurrentUser.id(jwt));
+    }
+
+    /** Search a vault (roadmap 3.4): every word must match; words of 3+ letters also match as prefixes. */
+    @GetMapping("/vaults/{vaultId}/search")
+    public List<MemoryView> search(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID vaultId,
+                                   @RequestParam("q") @Size(max = 200) String query,
+                                   @RequestParam(defaultValue = "50") int limit) {
+        return memories.search(vaultId, CurrentUser.id(jwt), query, limit);
     }
 
     public record MemoryRequest(

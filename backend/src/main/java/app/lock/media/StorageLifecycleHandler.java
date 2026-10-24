@@ -2,6 +2,7 @@ package app.lock.media;
 
 import app.lock.config.LockProperties;
 import app.lock.media.storage.ObjectStorage;
+import app.lock.memory.AssetDerivative;
 import app.lock.outbox.OutboxEvent;
 import app.lock.outbox.OutboxEventHandler;
 import java.time.Clock;
@@ -15,7 +16,8 @@ import org.springframework.stereotype.Component;
  * Keeps object storage in step with the database, asynchronously and idempotently:
  * <ul>
  *   <li>memory locked → apply object-lock retention to its assets</li>
- *   <li>draft discarded, asset removed/expired/failed, memory purged → delete the bytes</li>
+ *   <li>draft discarded, asset removed/expired/failed, memory purged → delete the bytes, and any
+ *       derivatives (their keys are derived from the original's, so no lookup is needed)</li>
  * </ul>
  */
 @Component
@@ -49,9 +51,16 @@ class StorageLifecycleHandler implements OutboxEventHandler {
                 objectKeys(event).forEach(key -> storage.protect(key, until));
             }
         } else if (SINGLE_DELETE.contains(type)) {
-            storage.delete((String) event.getPayload().get("objectKey"));
+            deleteWithDerivatives((String) event.getPayload().get("objectKey"));
         } else if (BULK_DELETE.contains(type)) {
-            objectKeys(event).forEach(storage::delete);
+            objectKeys(event).forEach(this::deleteWithDerivatives);
+        }
+    }
+
+    private void deleteWithDerivatives(String key) {
+        storage.delete(key);
+        for (AssetDerivative.Variant v : AssetDerivative.Variant.values()) {
+            storage.delete(AssetDerivative.keyFor(key, v));
         }
     }
 

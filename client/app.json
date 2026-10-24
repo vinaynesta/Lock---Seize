@@ -32,6 +32,10 @@
         {
           "photosPermission": "Lock uses your photo library so you can add photos and videos to the memories you preserve."
         }
+      ],
+      [
+        "expo-notifications",
+        {}
       ]
     ],
     "scheme": "lock",

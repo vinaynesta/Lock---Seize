@@ -20,6 +20,16 @@ class ProductionSecretsGuardTest {
     }
 
     @Test
+    void refusesTheDevMalwareScanner() {
+        var real = props("cmVhbC1zZWNyZXQ=", "cmVhbC1rZXk=", "real-s3-secret");
+        var devScan = new LockProperties(real.schedulingEnabled(), null, real.jwt(), real.crypto(), null, real.storage(), null,
+                new LockProperties.Scan("dev", null, 0, Duration.ofMinutes(1)), null, null, real.email(), null, null, null, null);
+        assertThatThrownBy(new ProductionSecretsGuard(devScan)::afterPropertiesSet)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("LOCK_SCAN_PROVIDER");
+    }
+
+    @Test
     void acceptsRealSecrets() {
         var guard = new ProductionSecretsGuard(props("cmVhbC1zZWNyZXQ=", "cmVhbC1rZXk=", "real-s3-secret"));
         assertThatCode(guard::afterPropertiesSet).doesNotThrowAnyException();
@@ -30,8 +40,19 @@ class ProductionSecretsGuardTest {
         var props = props("cmVhbC1zZWNyZXQ=", ProductionSecretsGuard.DEV_MASTER_KEY, "real-s3-secret");
         var kms = new LockProperties(props.schedulingEnabled(), null, props.jwt(),
                 new LockProperties.Crypto("aws-kms", ProductionSecretsGuard.DEV_MASTER_KEY, null, "alias/lock", "us-east-1", null),
-                null, props.storage(), null);
+                null, props.storage(), null, props.scan(), null, null, props.email(), null, null, null, null);
         assertThatCode(new ProductionSecretsGuard(kms)::afterPropertiesSet).doesNotThrowAnyException();
+    }
+
+    @Test
+    void refusesTheLogOnlyEmailSender() {
+        var real = props("cmVhbC1zZWNyZXQ=", "cmVhbC1rZXk=", "real-s3-secret");
+        var logEmail = new LockProperties(real.schedulingEnabled(), null, real.jwt(), real.crypto(), null, real.storage(), null,
+                real.scan(), null, null, new LockProperties.Email("log", null, null, Duration.ofMinutes(30), null, false),
+                null, null, null, null);
+        assertThatThrownBy(new ProductionSecretsGuard(logEmail)::afterPropertiesSet)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("LOCK_EMAIL_PROVIDER");
     }
 
     /** If someone changes a default in application.yml, the guard must learn about it. */
@@ -50,6 +71,15 @@ class ProductionSecretsGuardTest {
                 new LockProperties.Crypto("local", masterKey, null, null, null, null),
                 null,
                 new LockProperties.Storage("s3", "b", "e", "r", "a", s3Secret, true, Duration.ofMinutes(15), 1, 1, 1, 0),
+                null,
+                new LockProperties.Scan("clamav", "clamd", 3310, Duration.ofMinutes(1)),
+                null,
+                null,
+                new LockProperties.Email("postmark", "Lock <no-reply@lock.app>", "https://lock.app/reset-password",
+                        Duration.ofMinutes(30), "token", false),
+                null,
+                null,
+                null,
                 null);
     }
 }

@@ -81,6 +81,46 @@ lock:
     auth-requests-per-minute: 20   # per client IP, per /auth endpoint
     max-failed-logins: 5           # wrong passwords per account before a temporary lockout
     lockout: PT15M
+  scan:
+    # clamav: a clamd sidecar (production). dev: recognises only the EICAR test file (refused in prod).
+    provider: ${LOCK_SCAN_PROVIDER:dev}
+    clamav-host: ${LOCK_CLAMAV_HOST:localhost}
+    clamav-port: ${LOCK_CLAMAV_PORT:3310}
+    timeout: PT2M
+  export:
+    ttl: P7D             # ZIP exports are deleted from storage after this
+  account:
+    deletion-grace-period: P30D
+  email:
+    # log: nothing is sent (dev). postmark: sends via Postmark (set LOCK_POSTMARK_TOKEN).
+    provider: ${LOCK_EMAIL_PROVIDER:log}
+    from: ${LOCK_EMAIL_FROM:Lock <no-reply@lock.app>}
+    # Client page that takes ?token=. The Expo app handles lock://reset-password as well.
+    reset-url: ${LOCK_RESET_URL:http://localhost:8081/reset-password}
+    reset-ttl: PT30M
+    postmark-token: ${LOCK_POSTMARK_TOKEN:}
+    log-body: false      # the body holds reset links: only log it in local dev
+  push:
+    # log: nothing is sent (dev). expo: Expo push service (LOCK_EXPO_ACCESS_TOKEN if enhanced security is on).
+    provider: ${LOCK_PUSH_PROVIDER:log}
+    expo-access-token: ${LOCK_EXPO_ACCESS_TOKEN:}
+  transcode:
+    # none: videos/audio play as uploaded and HEIC/WebP get no thumbnail. ffmpeg: renditions + decoding.
+    provider: ${LOCK_TRANSCODE_PROVIDER:none}
+    ffmpeg-path: ${LOCK_FFMPEG_PATH:ffmpeg}
+    timeout: PT30M
+  quota:
+    default-plan: ${LOCK_DEFAULT_PLAN:free}
+    plans:               # bytes of original media a user may upload, across all vaults
+      free: 5GB
+      plus: 200GB
+      premium: 2TB
+  cold-tier:
+    # Tag originals of memories locked longer than "after" with lock-tier=cold. A bucket lifecycle rule
+    # on that tag moves them to an instant-retrieval class (GLACIER_IR), so Relive never waits on a
+    # restore. See docs/decisions.md §20 for the rule.
+    enabled: ${LOCK_COLD_TIER_ENABLED:false}
+    after: P365D
   memory:
     cooling-off: ${LOCK_COOLING_OFF:PT24H}
     deletion-grace-period: P30D

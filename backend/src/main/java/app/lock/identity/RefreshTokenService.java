@@ -44,10 +44,12 @@ public class RefreshTokenService {
         this.clock = clock;
     }
 
-    /** Starts a new family, e.g. on login. */
+    private static final int MAX_USER_AGENT = 300;
+
+    /** Starts a new family, e.g. on login. {@code userAgent} identifies the client, for the user's own reference. */
     @Transactional(propagation = Propagation.MANDATORY)
-    public IssuedRefreshToken start(UUID userId) {
-        return issue(userId, UUID.randomUUID());
+    public IssuedRefreshToken start(UUID userId, String userAgent) {
+        return issue(userId, UUID.randomUUID(), userAgent);
     }
 
     /**
@@ -55,7 +57,7 @@ public class RefreshTokenService {
      * tokens all get the same 401, so the response does not reveal which check failed.
      */
     @Transactional(noRollbackFor = ApiException.class)
-    public Rotation rotate(String rawToken) {
+    public Rotation rotate(String rawToken, String userAgent) {
         Instant now = Instant.now(clock);
         RefreshToken current = tokens.findForUpdate(hash(rawToken)).orElseThrow(RefreshTokenService::invalid);
         if (current.isRevoked() || current.isExpired(now)) {
@@ -69,7 +71,9 @@ public class RefreshTokenService {
             throw invalid();
         }
         current.rotate(now);
-        return new Rotation(current.getUserId(), issue(current.getUserId(), current.getFamilyId()));
+        // A rotation keeps the family's client unless a newer user agent was sent (e.g. after an app update).
+        String agent = userAgent != null ? userAgent : current.getUserAgent();
+        return new Rotation(current.getUserId(), issue(current.getUserId(), current.getFamilyId(), agent));
     }
 
     /** Logout: revokes the family the presented token belongs to. Unknown tokens are ignored. */
@@ -87,19 +91,39 @@ public class RefreshTokenService {
         tokens.revokeAllForUser(userId, Instant.now(clock));
     }
 
+    /** Signed-in devices, for the user's own review (F9). {@code lastActiveAt} is the latest refresh. */
+    public record SessionInfo(UUID id, String userAgent, Instant lastActiveAt, Instant expiresAt) {}
+
+    @Transactional(readOnly = true)
+    public java.util.List<SessionInfo> sessions(UUID userId) {
+        return tokens.findActiveSessions(userId, Instant.now(clock)).stream()
+                .map(t -> new SessionInfo(t.getFamilyId(), t.getUserAgent(), t.getCreatedAt(), t.getExpiresAt()))
+                .sorted(java.util.Comparator.comparing(SessionInfo::lastActiveAt).reversed())
+                .toList();
+    }
+
     /** Housekeeping: drops tokens that expired more than a day ago. */
     @Transactional
     public int deleteExpired() {
         return tokens.deleteExpiredBefore(Instant.now(clock).minus(Duration.ofDays(1)));
     }
 
-    private IssuedRefreshToken issue(UUID userId, UUID familyId) {
+    private IssuedRefreshToken issue(UUID userId, UUID familyId, String userAgent) {
         byte[] bytes = new byte[32];
         RANDOM.nextBytes(bytes);
         String raw = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
         Instant now = Instant.now(clock);
-        RefreshToken saved = tokens.save(new RefreshToken(userId, familyId, hash(raw), now, now.plus(props.jwt().refreshTtl())));
+        RefreshToken saved = tokens.save(new RefreshToken(userId, familyId, hash(raw), now, now.plus(props.jwt().refreshTtl()),
+                truncate(userAgent)));
         return new IssuedRefreshToken(raw, saved.getExpiresAt());
+    }
+
+    private static String truncate(String userAgent) {
+        if (userAgent == null || userAgent.isBlank()) {
+            return null;
+        }
+        String clean = userAgent.replaceAll("\\p{Cntrl}", "").strip();
+        return clean.length() > MAX_USER_AGENT ? clean.substring(0, MAX_USER_AGENT) : clean;
     }
 
     static String hash(String raw) {

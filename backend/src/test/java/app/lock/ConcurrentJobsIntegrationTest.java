@@ -23,6 +23,14 @@ class ConcurrentJobsIntegrationTest extends IntegrationTest {
 
     @Test
     void concurrentSealJobsLockEachMemoryExactlyOnce() throws Exception {
+        // Other tests share the database and may leave memories SEALING; complete them first so the
+        // counts below only see this test's memories.
+        clock.advance(Duration.ofHours(25));
+        while (memoryService.completeDueSeals(100) > 0) {
+            // drain
+        }
+        clock.set(START);
+
         TestUser ivy = register("Ivy");
         String vaultId = personalVault(ivy);
         int total = 40;

@@ -9,7 +9,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import app.lock.media.storage.InMemoryObjectStorage;
 import app.lock.memory.MemoryService;
 import app.lock.outbox.OutboxDispatcher;
 import app.lock.support.IntegrationTest;
@@ -182,6 +181,12 @@ class MemoryLifecycleIntegrationTest extends IntegrationTest {
 
     @Test
     void deliberateDelayedDeletionPurgesAfterGracePeriod() throws Exception {
+        // The database is shared between tests: run any deletion another test left due first.
+        clock.advance(Duration.ofDays(400));
+        while (memoryService.executeDueDeletions(100) > 0) {
+            // drain
+        }
+        clock.set(START);
         TestUser frank = register("Frank");
         String memoryId = lockedMemory(frank, personalVault(frank), "To be erased", null);
 
@@ -243,7 +248,9 @@ class MemoryLifecycleIntegrationTest extends IntegrationTest {
         TestUser ivy = register("Ivy");
         String memoryId = createMemory(ivy, personalVault(ivy), "Bad upload", null);
         byte[] declared = "declared".getBytes(StandardCharsets.UTF_8);
-        String ticket = mvc.perform(json(post("/memories/" + memoryId + "/assets/upload"), uploadBody(declared)).with(ivy.auth()))
+        String ticket = mvc.perform(json(post("/memories/" + memoryId + "/assets/upload"), """
+                        {"type":"PHOTO","mimeType":"image/jpeg","sizeBytes":%d,"checksumSha256":"%s"}"""
+                        .formatted(declared.length, app.lock.media.storage.InMemoryObjectStorage.sha256Base64(declared))).with(ivy.auth()))
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
         String assetId = read(ticket, "$.assetId");
         String key = jdbc.queryForObject("SELECT object_key FROM memory_assets WHERE id = ?::uuid", String.class, assetId);
@@ -363,29 +370,5 @@ class MemoryLifecycleIntegrationTest extends IntegrationTest {
         return memoryId;
     }
 
-    private void lockNow(TestUser user, String memoryId) throws Exception {
-        mvc.perform(post("/memories/" + memoryId + "/lock").with(user.auth())).andExpect(status().isOk());
-        clock.advance(Duration.ofHours(25));
-        memoryService.completeDueSeals(100);
-    }
 
-    private String uploadPhoto(TestUser user, String memoryId, byte[] bytes) throws Exception {
-        String ticket = mvc.perform(json(post("/memories/" + memoryId + "/assets/upload"), uploadBody(bytes)).with(user.auth()))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.method").value("PUT"))
-                .andReturn().getResponse().getContentAsString();
-        String assetId = read(ticket, "$.assetId");
-        String key = jdbc.queryForObject("SELECT object_key FROM memory_assets WHERE id = ?::uuid", String.class, assetId);
-        storage.put(key, bytes); // the client's direct upload
-        mvc.perform(post("/assets/" + assetId + "/complete").with(user.auth()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.uploadStatus").value("VERIFIED"));
-        return assetId;
-    }
-
-    private static String uploadBody(byte[] bytes) {
-        return """
-                {"type":"PHOTO","mimeType":"image/jpeg","sizeBytes":%d,"checksumSha256":"%s"}"""
-                .formatted(bytes.length, InMemoryObjectStorage.sha256Base64(bytes));
-    }
 }

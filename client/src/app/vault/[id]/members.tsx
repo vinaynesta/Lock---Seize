@@ -44,7 +44,7 @@ export default function Members() {
         <Label>People</Label>
         {visible.map((m) => (
           <Card key={m.userId}>
-            <Body style={{ fontWeight: '600' }}>{m.userId === me.data?.id ? 'You' : `Member ${m.userId.slice(0, 8)}`}</Body>
+            <Body style={{ fontWeight: '600' }}>{m.userId === me.data?.id ? 'You' : (m.displayName ?? `Member ${m.userId.slice(0, 8)}`)}</Body>
             <Body muted>
               {m.role === 'OWNER' ? 'Owner' : 'Member'} ·{' '}
               {m.status === 'INVITED' ? 'invitation pending' : `joined ${formatDate(m.joinedAt)}`}
@@ -56,7 +56,7 @@ export default function Members() {
                 onPress={() =>
                   confirm(
                     'Remove member?',
-                    'They lose access from now on. Memories they contributed stay in the vault.',
+                    'They lose access from now on, and new memories get a new encryption key. Memories they contributed stay in the vault.',
                     'Remove',
                     () => remove.mutate(m.userId),
                   )

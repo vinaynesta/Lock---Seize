@@ -37,9 +37,13 @@ class RefreshToken {
 
     private Instant revokedAt;
 
+    @Column(updatable = false)
+    private String userAgent;
+
     protected RefreshToken() {}
 
-    RefreshToken(UUID userId, UUID familyId, String tokenHash, Instant now, Instant expiresAt) {
+    RefreshToken(UUID userId, UUID familyId, String tokenHash, Instant now, Instant expiresAt, String userAgent) {
+        this.userAgent = userAgent;
         this.id = UUID.randomUUID();
         this.userId = userId;
         this.familyId = familyId;
@@ -65,7 +69,10 @@ class RefreshToken {
         this.rotatedAt = now;
     }
 
+    UUID getId() { return id; }
+    Instant getCreatedAt() { return createdAt; }
     UUID getUserId() { return userId; }
+    String getUserAgent() { return userAgent; }
     UUID getFamilyId() { return familyId; }
     Instant getExpiresAt() { return expiresAt; }
 }

@@ -25,6 +25,10 @@ public class Reflection {
     @Column(name = "body_ct", nullable = false, updatable = false)
     private byte[] bodyCt;
 
+    /** Vault key version the body was encrypted with (roadmap 2.4). */
+    @Column(nullable = false, updatable = false)
+    private int keyVersion;
+
     @Version
     private long version;
 
@@ -33,11 +37,12 @@ public class Reflection {
 
     protected Reflection() {}
 
-    Reflection(UUID id, UUID memoryId, UUID authorId, byte[] bodyCt, Instant now) {
+    Reflection(UUID id, UUID memoryId, UUID authorId, byte[] bodyCt, int keyVersion, Instant now) {
         this.id = id;
         this.memoryId = memoryId;
         this.authorId = authorId;
         this.bodyCt = bodyCt;
+        this.keyVersion = keyVersion;
         this.createdAt = now;
     }
 
@@ -45,5 +50,6 @@ public class Reflection {
     public UUID getMemoryId() { return memoryId; }
     public UUID getAuthorId() { return authorId; }
     public byte[] getBodyCt() { return bodyCt; }
+    public int getKeyVersion() { return keyVersion; }
     public Instant getCreatedAt() { return createdAt; }
 }

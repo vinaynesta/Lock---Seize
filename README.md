@@ -21,18 +21,27 @@ client/             Expo (React Native) app: iOS, Android and web
   src/api/          typed API client, direct-to-storage upload
 backend/            Spring Boot 4 API (Java 21), modular monolith
   src/main/java/app/lock/
-    identity/       register, login, JWT + rotating refresh tokens, password change
+    identity/       register, login, JWT + rotating refresh tokens, password change and reset,
+                    two-step verification (TOTP)
     vault/          personal & shared vaults, invitations, membership, authorization
     memory/         memory state machine, cooling-off, reflections, time capsules,
                     relive, integrity proof, delayed deletion, export
-    media/          presigned direct uploads, verification, storage lifecycle
-    crypto/         envelope encryption (KEK → vault key → content), local or AWS KMS KEK
+    media/          presigned direct uploads, verification, malware scanning, thumbnails,
+                    playback renditions (ffmpeg), cold tier, storage lifecycle
+    notification/   push notifications (Expo): devices, preferences, scheduled queue
+    search/         blind-index search over encrypted memories
+    quota/          storage quotas per plan
+    email/          outgoing email (log or Postmark)
+    export/         asynchronous ZIP export (manifest + original media)
+    account/        account deletion (Policy C, 30-day grace)
+    crypto/         envelope encryption (KEK → versioned vault keys → content), local or AWS KMS KEK
     security/       rate limiting and login lockout
     observability/  request ids (metrics live next to the code they measure)
     audit/          append-only audit trail
     outbox/         transactional outbox + dispatcher (queue seam)
   src/main/resources/db/migration/   Flyway schema + immutability triggers
-docs/               design documents
+docs/               design documents (incl. sealed-vault-design.md)
+deploy/             clamd.conf and the S3 bucket lifecycle for production
 docker-compose.yml  Postgres + MinIO for local development
 ```
 
@@ -71,11 +80,14 @@ must be listed in `LOCK_CORS_ORIGINS` (defaults cover `localhost:8081` and `loca
 
 ```bash
 cd backend && ./mvnw test                       # API
-cd client && npx tsc --noEmit && npx expo lint  # client
+cd client && npx tsc --noEmit && npx expo lint && npx jest  # client
 ```
 
 The tests run against a real embedded PostgreSQL (no Docker), so the database immutability
-triggers are tested too, not mocked.
+triggers are tested too, not mocked. A few tests use real external tools and skip when they are
+missing: `FfmpegTranscoderTest` (ffmpeg on the PATH), `S3ObjectStorageMinioTest` (MinIO at
+`LOCK_IT_S3_ENDPOINT`, bucket `lock-media-it` with object lock) and `RealClamdIntegrationTest`
+(clamd at `LOCK_IT_CLAMD_HOST`/`LOCK_IT_CLAMD_PORT`).
 
 ## Core flow (API)
 
@@ -84,21 +96,35 @@ triggers are tested too, not mocked.
 | Sign up (a personal vault is created automatically) | `POST /auth/register` |
 | Renew the 15-minute access token (rotates the refresh token) | `POST /auth/refresh` |
 | Sign out (revokes the refresh token) | `POST /auth/logout` |
+| Second sign-in step when two-step verification is on (login returned `mfaRequired` + `mfaToken`) | `POST /auth/login/mfa` |
+| Forgot password: email a reset link (always 202) / set a new password with it | `POST /auth/password-reset` / `POST /auth/password-reset/confirm` |
+| Signed-in devices, with the client each identified as | `GET /auth/sessions` |
+| Two-step verification: status, set up, confirm (returns recovery codes), new codes, turn off | `GET /account/mfa`, `POST /account/mfa/setup`, `/confirm`, `/recovery-codes`, `/disable` |
+| Storage used against the plan's quota | `GET /account/storage` |
+| Push: register / remove this device; notification preferences | `POST /devices`, `DELETE /devices`, `GET`/`PATCH /notification-preferences` |
 | Create a draft memory | `POST /vaults/{vaultId}/memories` (optional `Idempotency-Key` header) |
 | Edit the draft | `PATCH /memories/{id}` |
-| Attach media | `POST /memories/{id}/assets/upload` → `PUT` bytes to the returned URL → `POST /assets/{assetId}/complete` |
-| Lock (starts the cooling-off window) | `POST /memories/{id}/lock` |
+| Attach media | `POST /memories/{id}/assets/upload` → `PUT` bytes to the returned URL → `POST /assets/{assetId}/complete` (→ `PENDING_SCAN`, then `VERIFIED` once the malware scan passes, or `REJECTED`) |
+| Show media | `GET /assets/{assetId}/download?variant=thumb\|preview\|playback` (falls back to the original when the rendition doesn't exist) |
+| Lock (starts the cooling-off window; every asset must be scanned clean) | `POST /memories/{id}/lock` |
 | Undo during cooling-off | `POST /memories/{id}/lock/cancel` |
 | Timeline (paged; follow the `Next-Cursor` response header) | `GET /vaults/{vaultId}/memories?from=&to=&state=&limit=&cursor=` |
+| Search a vault (every word must match; 3+ letters match as a prefix) | `GET /vaults/{vaultId}/search?q=` |
 | Relive | `GET /memories/{id}/relive` |
 | "On this day" | `GET /memories/on-this-day` |
 | Add a reflection to a locked memory | `POST /memories/{id}/reflections` |
 | Proof of preservation | `GET /memories/{id}/integrity` |
 | Deliberate deletion (re-auth, 30-day delay) | `POST /memories/{id}/deletion-request` / `DELETE` to cancel |
-| Export a vault | `GET /vaults/{vaultId}/export` |
+| Export a vault as JSON | `GET /vaults/{vaultId}/export` |
+| Export a vault as a ZIP with original media (async, kept 7 days) | `POST /vaults/{vaultId}/exports` → poll `GET /exports/{id}` → `GET /exports/{id}/download` |
+| Delete the account (re-auth, 30-day delay, Policy C) | `POST /account/deletion-request` / `GET` / `DELETE` to cancel |
 | Shared vaults | `POST /vaults`, `POST /vaults/{id}/members`, `POST /invitations/{vaultId}/accept`, `POST /vaults/{id}/leave` |
 
 There is deliberately no `DELETE /memories/{id}` for locked memories.
+
+Once two-step verification is on, deletion requests (memory and account) and both exports need the
+current code in an `X-MFA-Code` header. Uploads beyond the plan's quota are refused at presign time
+with `413 QUOTA_EXCEEDED`.
 
 ## Configuration
 
@@ -115,10 +141,18 @@ There is deliberately no `DELETE /memories/{id}` for locked memories.
 | `LOCK_CORS_ORIGINS` | `http://localhost:8081,http://localhost:19006` | Browser origins allowed to call the API |
 | `LOCK_S3_ENDPOINT`, `LOCK_S3_BUCKET`, `LOCK_S3_ACCESS_KEY`, `LOCK_S3_SECRET_KEY` | MinIO defaults | Object storage |
 | `LOCK_OBJECT_LOCK_YEARS` | `0` | Governance-mode retention applied to media when a memory locks |
+| `LOCK_SCAN_PROVIDER` | `dev` | `clamav` (clamd sidecar) or `dev` (only detects the EICAR test file). **Set to `clamav` in production.** |
+| `LOCK_CLAMAV_HOST`, `LOCK_CLAMAV_PORT` | `localhost`, `3310` | clamd address. Raise clamd's `StreamMaxLength` (default 100 MB) to cover the largest upload (2 GB video), or big videos stay `PENDING_SCAN` |
 | `LOCK_MANAGEMENT_PORT` | — | Serve `/actuator/metrics` and `/actuator/prometheus` on this private port (they are refused on the app port) |
 | `LOCK_LOG_FORMAT` | plain text | `ecs` or `logstash` for one JSON object per log line |
 | `LOCK_FORWARD_HEADERS` | `none` | Set to `framework` behind a load balancer so rate limits see the real client IP |
-| `SPRING_PROFILES_ACTIVE` | — | `prod` refuses to start while the JWT secret, master key or S3 secret still has its dev default |
+| `LOCK_EMAIL_PROVIDER` | `log` | `postmark` (set `LOCK_POSTMARK_TOKEN`, `LOCK_EMAIL_FROM`) or `log` (dev: nothing is sent). **Set in production.** |
+| `LOCK_RESET_URL` | `http://localhost:8081/reset-password` | Client page that takes `?token=` from the password-reset email |
+| `LOCK_PUSH_PROVIDER`, `LOCK_EXPO_ACCESS_TOKEN` | `log`, — | `expo` sends push notifications through Expo; `log` only logs titles |
+| `LOCK_TRANSCODE_PROVIDER`, `LOCK_FFMPEG_PATH` | `none`, `ffmpeg` | `ffmpeg` makes playback MP4s of videos and audio and thumbnails of HEIC/WebP photos and videos |
+| `LOCK_DEFAULT_PLAN` | `free` | Plan for users without one; limits in `lock.quota.plans` (free 5 GB, plus 200 GB, premium 2 TB) |
+| `LOCK_COLD_TIER_ENABLED` | `false` | Tag originals of memories locked for over a year for the cold tier; needs the lifecycle rule in `deploy/s3-lifecycle.json` |
+| `SPRING_PROFILES_ACTIVE` | — | `prod` refuses to start while the JWT secret, master key or S3 secret still has its dev default, or with the dev malware scanner or the log-only email sender |
 
 ## License
 

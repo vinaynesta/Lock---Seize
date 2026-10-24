@@ -1,6 +1,7 @@
 package app.lock.media.storage;
 
 import app.lock.config.LockProperties;
+import java.io.InputStream;
 import java.net.URI;
 import java.time.Instant;
 import java.util.HashMap;
@@ -11,10 +12,12 @@ import org.springframework.stereotype.Component;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.model.ChecksumMode;
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
@@ -23,6 +26,9 @@ import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.ObjectLockRetentionMode;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRetentionRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectTaggingRequest;
+import software.amazon.awssdk.services.s3.model.Tag;
+import software.amazon.awssdk.services.s3.model.Tagging;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
 
@@ -99,11 +105,45 @@ public class S3ObjectStorage implements ObjectStorage {
     }
 
     @Override
+    public InputStream read(String key) {
+        return s3.getObject(GetObjectRequest.builder().bucket(props.bucket()).key(key).build());
+    }
+
+    @Override
+    public void write(String key, InputStream bytes, long sizeBytes, String contentType) {
+        s3.putObject(PutObjectRequest.builder()
+                        .bucket(props.bucket())
+                        .key(key)
+                        .contentType(contentType)
+                        .contentLength(sizeBytes)
+                        .build(),
+                RequestBody.fromInputStream(bytes, sizeBytes));
+    }
+
+    @Override
+    public void quarantine(String key) {
+        s3.copyObject(CopyObjectRequest.builder()
+                .sourceBucket(props.bucket()).sourceKey(key)
+                .destinationBucket(props.bucket()).destinationKey(QUARANTINE_PREFIX + key)
+                .build());
+        delete(key);
+    }
+
+    @Override
     public void protect(String key, Instant retainUntil) {
         s3.putObjectRetention(PutObjectRetentionRequest.builder()
                 .bucket(props.bucket())
                 .key(key)
                 .retention(r -> r.mode(ObjectLockRetentionMode.GOVERNANCE).retainUntilDate(retainUntil))
+                .build());
+    }
+
+    @Override
+    public void markCold(String key) {
+        s3.putObjectTagging(PutObjectTaggingRequest.builder()
+                .bucket(props.bucket())
+                .key(key)
+                .tagging(Tagging.builder().tagSet(Tag.builder().key(COLD_TIER_TAG).value(COLD_TIER_VALUE).build()).build())
                 .build());
     }
 

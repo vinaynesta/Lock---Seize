@@ -6,17 +6,24 @@ import { View } from 'react-native';
 
 import { api } from '@/api/lock';
 import type { Asset, Memory } from '@/api/types';
-import { uploadPickedAsset } from '@/api/upload';
+import { assetTypeOf, mimeTypeOf, uploadPickedAsset } from '@/api/upload';
 import { AssetGallery } from '@/components/AssetGallery';
 import { Body, Button, Card, ErrorText, Field, Label, Loading, Screen, StateBadge, Title } from '@/components/ui';
+import { PendingSync } from '@/components/PendingSync';
 import { confirm } from '@/lib/confirm';
+import { drain, offlineSupported, queueUpload } from '@/lib/offlineQueue';
 import { formatDate, formatDateTime, timeUntil } from '@/lib/format';
 import { space, useTheme } from '@/theme';
 
 export default function MemoryDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const queryClient = useQueryClient();
-  const memory = useQuery({ queryKey: ['memory', id], queryFn: () => api.memory(id) });
+  const memory = useQuery({
+    queryKey: ['memory', id],
+    queryFn: () => api.memory(id),
+    // Uploads are scanned in the background: refresh until every file has a verdict.
+    refetchInterval: (q) => (q.state.data?.assets.some((a) => a.uploadStatus === 'PENDING_SCAN') ? 3000 : false),
+  });
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
 
   const onUpdated = (m: Memory) => {
@@ -90,8 +97,16 @@ function DraftActions({ memory, onUpdated }: { memory: Memory; onUpdated: (m: Me
     if (result.canceled) return;
     setUploading(true);
     try {
-      for (const picked of result.assets) {
-        await uploadPickedAsset(memory.id, picked);
+      if (offlineSupported) {
+        // Copied to app storage and uploaded in the background: survives going offline or closing the app.
+        for (const picked of result.assets) {
+          await queueUpload(memory.id, picked.uri, assetTypeOf(picked), mimeTypeOf(picked));
+        }
+        await drain();
+      } else {
+        for (const picked of result.assets) {
+          await uploadPickedAsset(memory.id, picked);
+        }
       }
     } catch (e) {
       setUploadError(e);
@@ -114,6 +129,7 @@ function DraftActions({ memory, onUpdated }: { memory: Memory; onUpdated: (m: Me
   return (
     <View style={{ gap: space.lg }}>
       <AssetGallery assets={memory.assets} onRemove={(a) => removeAsset.mutate(a)} />
+      <PendingSync />
       <Button title={uploading ? 'Uploading…' : 'Add photos or videos'} variant="secondary" onPress={pick} loading={uploading} />
       <ErrorText error={uploadError ?? removeAsset.error} />
 
@@ -133,7 +149,7 @@ function DraftActions({ memory, onUpdated }: { memory: Memory; onUpdated: (m: Me
         <Button
           title="Lock"
           loading={lock.isPending}
-          disabled={uploading}
+          disabled={uploading || memory.assets.some((a) => a.uploadStatus === 'PENDING_SCAN')}
           onPress={() =>
             confirm(
               'Lock this memory?',
