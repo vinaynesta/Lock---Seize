@@ -19,6 +19,10 @@ public interface MemoryRepository extends JpaRepository<Memory, UUID> {
 
     Optional<Memory> findByCreatedByAndIdempotencyKey(UUID createdBy, String idempotencyKey);
 
+    List<Memory> findByVaultId(UUID vaultId);
+
+    List<Memory> findByCreatedByAndState(UUID createdBy, MemoryState state);
+
     /**
      * Timeline page: newest first, optionally bounded by date and state. Keyset pagination: pass the
      * (occurredAt, id) of the last memory already seen as the cursor, or nulls for the first page.

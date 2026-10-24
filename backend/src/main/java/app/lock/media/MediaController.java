@@ -1,6 +1,8 @@
 package app.lock.media;
 
+import app.lock.common.ApiException;
 import app.lock.common.CurrentUser;
+import app.lock.memory.AssetDerivative;
 import app.lock.memory.MemoryAsset;
 import app.lock.memory.MemoryView;
 import jakarta.validation.Valid;
@@ -17,6 +19,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -41,9 +44,26 @@ public class MediaController {
         return MemoryView.AssetView.of(media.completeUpload(assetId, CurrentUser.id(jwt)));
     }
 
+    /**
+     * {@code ?variant=thumb|preview|playback} asks for a derivative; the original is returned if it does
+     * not exist (yet). The response's {@code variant} says which was served.
+     */
     @GetMapping("/assets/{assetId}/download")
-    public DownloadResponse download(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID assetId) {
-        return new DownloadResponse(media.downloadUrl(assetId, CurrentUser.id(jwt)));
+    public DownloadResponse download(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID assetId,
+                                     @RequestParam(required = false) String variant) {
+        MediaService.Download d = media.downloadUrl(assetId, CurrentUser.id(jwt), parseVariant(variant));
+        return new DownloadResponse(d.url(), d.variant());
+    }
+
+    private static AssetDerivative.Variant parseVariant(String variant) {
+        if (variant == null || variant.isBlank() || variant.equalsIgnoreCase("original")) {
+            return null;
+        }
+        try {
+            return AssetDerivative.Variant.valueOf(variant.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw ApiException.badRequest("INVALID_VARIANT", "variant must be thumb, preview, playback or original");
+        }
     }
 
     @DeleteMapping("/assets/{assetId}")
@@ -58,5 +78,6 @@ public class MediaController {
             @Positive long sizeBytes,
             @NotBlank String checksumSha256) {}
 
-    public record DownloadResponse(URI url) {}
+    /** {@code variant} is the derivative served, or null for the original. */
+    public record DownloadResponse(URI url, AssetDerivative.Variant variant) {}
 }

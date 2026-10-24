@@ -13,11 +13,11 @@ function toBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
-function assetTypeOf(picked: ImagePickerAsset): AssetType {
+export function assetTypeOf(picked: ImagePickerAsset): AssetType {
   return picked.type === 'video' ? 'VIDEO' : 'PHOTO';
 }
 
-function mimeTypeOf(picked: ImagePickerAsset): string {
+export function mimeTypeOf(picked: ImagePickerAsset): string {
   if (picked.mimeType) return picked.mimeType;
   return picked.type === 'video' ? 'video/mp4' : 'image/jpeg';
 }

@@ -109,6 +109,28 @@ class RefreshTokenIntegrationTest extends IntegrationTest {
                 .isZero();
     }
 
+    @Test
+    void eachSessionRemembersItsClient() throws Exception {
+        TestUser eve = register("Eve");
+        String creds = """
+                {"email":"%s","password":"%s"}""".formatted(eve.email(), eve.password());
+        String phone = read(mvc.perform(json(post("/auth/login"), creds).header("User-Agent", "Lock/1.0 (iPhone; iOS 19)"))
+                .andReturn().getResponse().getContentAsString(), "$.refreshToken");
+        // A rotation without a header keeps the session's client.
+        refresh(phone).andExpect(status().isOk());
+        // Long values are truncated.
+        mvc.perform(json(post("/auth/login"), creds).header("User-Agent", "Mozilla/5.0 " + "x".repeat(400)))
+                .andExpect(status().isOk());
+
+        String sessions = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/auth/sessions")
+                        .with(eve.auth()))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        java.util.List<String> agents = com.jayway.jsonpath.JsonPath.read(sessions, "$[*].userAgent");
+        // Three sessions: register(), the phone, and the browser.
+        assertThat(agents).hasSize(3).contains("Lock/1.0 (iPhone; iOS 19)");
+        assertThat(agents).anySatisfy(a -> assertThat(a).isNotNull().startsWith("Mozilla/5.0 x").hasSize(300));
+    }
+
     private String login(TestUser user) throws Exception {
         return read(mvc.perform(json(post("/auth/login"), """
                         {"email":"%s","password":"%s"}""".formatted(user.email(), user.password())))

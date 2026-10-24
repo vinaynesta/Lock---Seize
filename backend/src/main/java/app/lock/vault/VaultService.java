@@ -10,6 +10,7 @@ import app.lock.identity.UserCreatedEvent;
 import app.lock.outbox.OutboxPublisher;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -22,16 +23,18 @@ public class VaultService {
 
     private final VaultRepository vaults;
     private final VaultMemberRepository members;
+    private final VaultKeyRepository keys;
     private final IdentityService identity;
     private final ContentCipher cipher;
     private final AuditService audit;
     private final OutboxPublisher outbox;
     private final Clock clock;
 
-    public VaultService(VaultRepository vaults, VaultMemberRepository members, IdentityService identity,
-                        ContentCipher cipher, AuditService audit, OutboxPublisher outbox, Clock clock) {
+    public VaultService(VaultRepository vaults, VaultMemberRepository members, VaultKeyRepository keys,
+                        IdentityService identity, ContentCipher cipher, AuditService audit, OutboxPublisher outbox, Clock clock) {
         this.vaults = vaults;
         this.members = members;
+        this.keys = keys;
         this.identity = identity;
         this.cipher = cipher;
         this.audit = audit;
@@ -48,7 +51,8 @@ public class VaultService {
     @Transactional
     public Vault create(UUID ownerId, Vault.Type type, String name) {
         Instant now = Instant.now(clock);
-        Vault vault = vaults.save(new Vault(type, name.trim(), ownerId, cipher.newWrappedVaultKey(), now));
+        Vault vault = vaults.save(new Vault(type, name.trim(), ownerId, now));
+        keys.save(new VaultKey(vault.getId(), vault.getKeyVersion(), cipher.newWrappedVaultKey(), now));
         members.save(VaultMember.owner(vault.getId(), ownerId, now));
         audit.record(AuditEventType.VAULT_CREATED, ownerId, vault.getId(), null, Map.of("type", type.name()));
         return vault;
@@ -83,7 +87,36 @@ public class VaultService {
                 .filter(VaultMember::isActive)
                 .orElseThrow(() -> ApiException.notFound("Vault"));
         Vault vault = vaults.findById(vaultId).orElseThrow(() -> ApiException.notFound("Vault"));
-        return new VaultAccess(vaultId, userId, member.getRole(), vault.getType(), vault.getWrappedKey(), vault.getKeyVersion());
+        return access(vault, userId, member.getRole());
+    }
+
+    /**
+     * Keys for server-side maintenance with no user in the loop (e.g. rebuilding the search index).
+     * Never returned to a client; carries no user.
+     */
+    @Transactional(readOnly = true)
+    public VaultAccess systemAccess(UUID vaultId) {
+        Vault vault = vaults.findById(vaultId).orElseThrow(() -> ApiException.notFound("Vault"));
+        return access(vault, null, VaultMember.Role.MEMBER);
+    }
+
+    private VaultAccess access(Vault vault, UUID userId, VaultMember.Role role) {
+        Map<Integer, ContentCipher.WrappedKey> byVersion = new HashMap<>();
+        keys.findByVaultId(vault.getId()).forEach(k -> byVersion.put(k.getVersion(), k.getWrappedKey()));
+        return new VaultAccess(vault.getId(), userId, role, vault.getType(), vault.getKeyVersion(), Map.copyOf(byVersion));
+    }
+
+    /**
+     * Roadmap 2.4: a member lost access, so new content gets a fresh data key they never saw. Old
+     * content stays under its old version; re-encrypting locked ciphertext would break immutability
+     * and the integrity proof (decisions.md).
+     */
+    private void rotateKey(UUID vaultId, UUID actorId, String reason) {
+        Instant now = Instant.now(clock);
+        Vault vault = vaults.findById(vaultId).orElseThrow(() -> ApiException.notFound("Vault"));
+        int version = vault.nextKeyVersion(now);
+        keys.save(new VaultKey(vaultId, version, cipher.newWrappedVaultKey(), now));
+        audit.record(AuditEventType.VAULT_KEY_ROTATED, actorId, vaultId, null, Map.of("keyVersion", version, "reason", reason));
     }
 
     @Transactional(readOnly = true)
@@ -159,9 +192,14 @@ public class VaultService {
         VaultMember member = members.findById(new VaultMember.Id(vaultId, memberId))
                 .filter(m -> m.getStatus() == VaultMember.Status.ACTIVE || m.getStatus() == VaultMember.Status.INVITED)
                 .orElseThrow(() -> ApiException.notFound("Member"));
+        boolean wasActive = member.isActive();
         member.remove(Instant.now(clock));
         audit.record(AuditEventType.MEMBER_REMOVED, ownerId, vaultId, null, Map.of("member", memberId.toString()));
         outbox.publish("vault", vaultId, "vault.member.removed", Map.of("userId", memberId.toString()));
+        if (wasActive) {
+            // An invitee never had access, so only an active member's removal needs a new key.
+            rotateKey(vaultId, ownerId, "member_removed");
+        }
     }
 
     /**
@@ -180,6 +218,49 @@ public class VaultService {
         audit.record(AuditEventType.MEMBER_LEFT, userId, vaultId, null);
         if (members.countActive(vaultId) == 0) {
             vaults.findById(vaultId).orElseThrow().markDormant(now);
+        } else {
+            rotateKey(vaultId, userId, "member_left");
         }
+    }
+
+    /**
+     * Account deletion (roadmap 2.5, Policy C): drops the user from every shared vault they belong
+     * to, exactly as if they had left, and returns their personal vault ids for purging.
+     */
+    @Transactional
+    public List<UUID> detachDeletedUser(UUID userId) {
+        Instant now = Instant.now(clock);
+        List<UUID> personal = new java.util.ArrayList<>();
+        for (VaultMember m : members.findAllByUserId(userId)) {
+            Vault vault = vaults.findById(m.getVaultId()).orElseThrow();
+            if (vault.getType() == Vault.Type.PERSONAL) {
+                personal.add(vault.getId());
+                continue;
+            }
+            if (m.getStatus() == VaultMember.Status.INVITED) {
+                m.decline();
+            } else if (m.isActive()) {
+                m.leave(now);
+                audit.record(AuditEventType.MEMBER_LEFT, userId, vault.getId(), null, Map.of("reason", "account_deleted"));
+                if (members.countActive(vault.getId()) == 0) {
+                    vault.markDormant(now);
+                } else {
+                    rotateKey(vault.getId(), userId, "account_deleted");
+                }
+            }
+        }
+        return personal;
+    }
+
+    /** Purge of a personal vault after account deletion. The caller has already removed its memories. */
+    @Transactional
+    public void deletePersonalVault(UUID vaultId) {
+        Vault vault = vaults.findById(vaultId).orElseThrow();
+        if (vault.getType() != Vault.Type.PERSONAL) {
+            throw new IllegalStateException("Only personal vaults are deleted with their account");
+        }
+        members.deleteAll(members.findByVaultId(vaultId));
+        keys.deleteAll(keys.findByVaultId(vaultId));
+        vaults.delete(vault);
     }
 }
