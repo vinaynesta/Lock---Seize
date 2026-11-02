@@ -49,6 +49,20 @@ public class ContentCipher {
         return new String(AesGcm.decrypt(unwrap(vaultKey), ciphertext, aad(recordId, field)), StandardCharsets.UTF_8);
     }
 
+    /**
+     * A key for the search blind index (roadmap 3.4), derived from the vault data key with HMAC under
+     * a fixed label: never equal to the data key, and different for every vault and key version.
+     */
+    public byte[] searchKey(WrappedKey vaultKey) {
+        try {
+            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+            mac.init(new javax.crypto.spec.SecretKeySpec(unwrap(vaultKey), "HmacSHA256"));
+            return mac.doFinal("lock:search-index:v1".getBytes(StandardCharsets.UTF_8));
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     private byte[] unwrap(WrappedKey vaultKey) {
         return kek.unwrap(vaultKey.bytes(), vaultKey.kekId());
     }

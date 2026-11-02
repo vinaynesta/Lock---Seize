@@ -17,7 +17,7 @@ export function MemoryCard({ memory }: { memory: Memory }) {
         <StateBadge state={memory.state} capsule={memory.sealedCapsule} />
       </View>
       <Body style={{ fontSize: 18, fontWeight: '600' }}>
-        {memory.sealedCapsule ? `Opens ${formatDate(memory.revealAt)}` : memory.title}
+        {memory.sealedCapsule ? `Opens ${formatDate(memory.revealAt)}` : (memory.title ?? '🔒 Encrypted')}
       </Body>
       {memory.feeling && !memory.sealedCapsule ? <Body muted>Feeling {memory.feeling}</Body> : null}
     </Card>

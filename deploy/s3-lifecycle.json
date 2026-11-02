@@ -1,0 +1,23 @@
+{
+  "Rules": [
+    {
+      "ID": "lock-expire-exports",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "exports/" },
+      "Expiration": { "Days": 8 },
+      "NoncurrentVersionExpiration": { "NoncurrentDays": 1 }
+    },
+    {
+      "ID": "lock-cold-tier",
+      "Status": "Enabled",
+      "Filter": { "Tag": { "Key": "lock-tier", "Value": "cold" } },
+      "Transitions": [{ "Days": 0, "StorageClass": "GLACIER_IR" }]
+    },
+    {
+      "ID": "lock-abort-incomplete-uploads",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "" },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 2 }
+    }
+  ]
+}

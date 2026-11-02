@@ -8,7 +8,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Refuses to start under the {@code prod} profile while any secret still has the public default
- * from application.yml (the master key only matters when the KEK is local, not in KMS). Without
+ * from application.yml (the master key only matters when the KEK is local, not in KMS), or while
+ * uploads would only be checked by the dev malware scanner, or emails would only be logged. Without
  * this, a missing env var silently means forgeable JWTs and a published key-encryption key
  * (roadmap 1.4).
  */
@@ -39,6 +40,14 @@ class ProductionSecretsGuard implements InitializingBean {
         }
         if ("s3".equals(props.storage().type()) && DEV_S3_SECRET.equals(props.storage().secretKey())) {
             problems.add("LOCK_S3_SECRET_KEY");
+        }
+        // The dev scanner only knows the EICAR test file: production must scan for real (roadmap 2.2).
+        if (props.scan() == null || props.scan().isDev()) {
+            problems.add("LOCK_SCAN_PROVIDER");
+        }
+        // The log sender drops every email: password resets (roadmap 2.6) would silently never arrive.
+        if (props.email() == null || props.email().provider() == null || "log".equals(props.email().provider())) {
+            problems.add("LOCK_EMAIL_PROVIDER");
         }
         if (!problems.isEmpty()) {
             throw new IllegalStateException("Refusing to start with dev-default secrets in the prod profile. Set: "

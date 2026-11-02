@@ -1,6 +1,7 @@
 package app.lock.vault;
 
 import app.lock.common.CurrentUser;
+import app.lock.identity.IdentityService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -8,6 +9,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -25,15 +27,18 @@ import org.springframework.web.bind.annotation.RestController;
 public class VaultController {
 
     private final VaultService vaults;
+    private final IdentityService identity;
 
-    public VaultController(VaultService vaults) {
+    public VaultController(VaultService vaults, IdentityService identity) {
         this.vaults = vaults;
+        this.identity = identity;
     }
 
     @PostMapping("/vaults")
     @ResponseStatus(HttpStatus.CREATED)
     public VaultResponse create(@AuthenticationPrincipal Jwt jwt, @Valid @RequestBody CreateVaultRequest req) {
-        return VaultResponse.of(vaults.create(CurrentUser.id(jwt), req.type(), req.name()));
+        return VaultResponse.of(vaults.create(CurrentUser.id(jwt), req.type(), req.name(),
+                req.encryption() == null ? Vault.Encryption.SERVER : req.encryption()));
     }
 
     @GetMapping("/vaults")
@@ -54,7 +59,9 @@ public class VaultController {
 
     @GetMapping("/vaults/{vaultId}/members")
     public List<MemberResponse> members(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID vaultId) {
-        return vaults.listMembers(vaultId, CurrentUser.id(jwt)).stream().map(MemberResponse::of).toList();
+        List<VaultMember> members = vaults.listMembers(vaultId, CurrentUser.id(jwt));
+        Map<UUID, String> names = identity.displayNames(members.stream().map(VaultMember::getUserId).toList());
+        return members.stream().map(m -> MemberResponse.of(m, names.get(m.getUserId()))).toList();
     }
 
     @PostMapping("/vaults/{vaultId}/members")
@@ -91,22 +98,32 @@ public class VaultController {
         return MemberResponse.of(vaults.respondToInvitation(vaultId, CurrentUser.id(jwt), false));
     }
 
-    public record CreateVaultRequest(@NotNull Vault.Type type, @NotBlank @Size(max = 120) String name) {}
+    /** {@code encryption} defaults to SERVER; SEALED makes an end-to-end encrypted vault (roadmap 3.6). */
+    public record CreateVaultRequest(@NotNull Vault.Type type, @NotBlank @Size(max = 120) String name,
+                                     Vault.Encryption encryption) {}
 
     public record RenameVaultRequest(@NotBlank @Size(max = 120) String name) {}
 
     public record InviteRequest(@NotBlank @Email String email) {}
 
-    public record VaultResponse(UUID id, Vault.Type type, String name, UUID ownerId, Vault.State state, Instant createdAt) {
+    public record VaultResponse(UUID id, Vault.Type type, String name, UUID ownerId, Vault.State state,
+                                Vault.Encryption encryption, int keyVersion, Instant createdAt) {
         static VaultResponse of(Vault v) {
-            return new VaultResponse(v.getId(), v.getType(), v.getName(), v.getOwnerId(), v.getState(), v.getCreatedAt());
+            return new VaultResponse(v.getId(), v.getType(), v.getName(), v.getOwnerId(), v.getState(), v.getEncryption(),
+                    v.getKeyVersion(), v.getCreatedAt());
         }
     }
 
+    /** {@code displayName} is set on the member list; a deleted account shows as "Former member". */
     public record MemberResponse(UUID vaultId, UUID userId, VaultMember.Role role, VaultMember.Status status,
-                                 Instant invitedAt, Instant joinedAt) {
+                                 Instant invitedAt, Instant joinedAt, String displayName) {
         static MemberResponse of(VaultMember m) {
-            return new MemberResponse(m.getVaultId(), m.getUserId(), m.getRole(), m.getStatus(), m.getInvitedAt(), m.getJoinedAt());
+            return of(m, null);
+        }
+
+        static MemberResponse of(VaultMember m, String displayName) {
+            return new MemberResponse(m.getVaultId(), m.getUserId(), m.getRole(), m.getStatus(), m.getInvitedAt(),
+                    m.getJoinedAt(), displayName);
         }
     }
 }

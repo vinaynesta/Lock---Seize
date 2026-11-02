@@ -32,6 +32,18 @@
         {
           "photosPermission": "Lock uses your photo library so you can add photos and videos to the memories you preserve."
         }
+      ],
+      [
+        "expo-notifications",
+        {}
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Lock uses the camera only to scan the code that approves your other device for sealed vaults.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
       ]
     ],
     "scheme": "lock",

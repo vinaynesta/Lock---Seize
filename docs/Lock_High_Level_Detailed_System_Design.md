@@ -1,6 +1,8 @@
 # Lock --- High-Level & Detailed System Design
 
-**Document Status:** Draft v1.0\
+**Document Status:** Draft v1.0 (design rationale). The system as built is described in
+[`architecture.md`](architecture.md); where the build differs from this draft, an **As built** note
+below says so and links the decision.\
 **Product:** Lock\
 **Purpose:** Architecture and engineering design for a privacy-first
 memory preservation platform\
@@ -392,6 +394,9 @@ The original locked memory content must remain preserved.
                                      Media Worker  Notification  Index Worker
 ```
 
+
+> **As built (2026-11):** a modular monolith with no separate gateway service, cache or message broker. A transactional outbox in PostgreSQL drives the media worker, notifications, exports and email in-process; clamd and ffmpeg do scanning and renditions; KMS optionally holds the KEK. Current diagrams: [`architecture.md`](architecture.md) §1–2 and §6.
+
 ------------------------------------------------------------------------
 
 # 8. Component Responsibilities
@@ -510,6 +515,9 @@ Search Indexer
 Cleanup/Reconciliation Worker
 ```
 
+
+> **As built (2026-11):** media processing (scan → thumbnails → playback renditions), notifications, exports, cleanup and search backfill all run as outbox handlers or scheduled jobs inside the API. Full list: [`architecture.md`](architecture.md) §6.
+
 ------------------------------------------------------------------------
 
 # 9. Storage Architecture
@@ -563,6 +571,9 @@ checksum
 encryption_metadata
 upload_status
 ```
+
+
+> **As built (2026-11):** `encryption_metadata` is `storage-sse:AES256` for media in server-side vaults and `e2e:v1` for media encrypted on the device in sealed vaults (decisions §25). Derivatives live under `derived/<original key>/`.
 
 ------------------------------------------------------------------------
 
@@ -766,6 +777,9 @@ Encrypted Content
 The exact cryptographic implementation should use established, audited
 cryptographic primitives rather than custom cryptography.
 
+
+> **As built (2026-11):** two tiers. **Server-side vaults:** KEK (local key or AWS KMS) → versioned vault data keys → AES-256-GCM content with `recordId:field` AAD (decisions §1, §15). **Sealed vaults:** a per-user X25519 key pair wrapped by an Argon2id passphrase and a 24-word recovery phrase; vault keys wrapped to each member's public key; content and media encrypted on the device (decisions §24–25). Diagram: [`architecture.md`](architecture.md) §7.
+
 ------------------------------------------------------------------------
 
 # 16. Why Hierarchical Keys?
@@ -832,6 +846,9 @@ This supports:
 -   Shared access
 
 without re-encrypting every memory when a user's password changes.
+
+
+> **As built (2026-11):** server-side vaults keep one KEK-wrapped key per version (`vault_keys`); sealed vaults keep one copy per member and version (`vault_member_keys`), wrapped on a member's device.
 
 ------------------------------------------------------------------------
 
@@ -970,6 +987,9 @@ Trade-off:
 The MVP should explicitly choose a recovery philosophy before
 implementing encryption.
 
+
+> **As built (2026-11):** both philosophies ship. Server-side vaults use server-assisted recovery (Approach A): a password reset restores everything (decisions §2, §18). Sealed vaults use Approach B plus device approval: a recovery phrase, or an already-unlocked device approving a new one by QR code (decisions §24, roadmap 3.6e).
+
 ------------------------------------------------------------------------
 
 # 22. Shared Vault Member Removal
@@ -1010,6 +1030,9 @@ Existing content may require controlled re-wrapping or re-encryption
 depending on the exact cryptographic design.
 
 This is an important trade-off to document early.
+
+
+> **As built (2026-11):** removal (or leaving) creates a new vault key version used for new content; old content keeps its version (decisions §15). In sealed vaults the next member device generates the new version for the remaining members.
 
 ------------------------------------------------------------------------
 
@@ -1280,6 +1303,9 @@ Event Queue
 This prevents the user-facing request from depending on every downstream
 service.
 
+
+> **As built (2026-11):** the queue is a transactional outbox table drained every 5 s with `SKIP LOCKED`; handlers are `StorageLifecycleHandler`, `AssetProcessor`, `NotificationEventHandler`, `ExportService` and `PasswordResetMailer`. See [`architecture.md`](architecture.md) §6.
+
 ------------------------------------------------------------------------
 
 # 29. Idempotency
@@ -1403,6 +1429,9 @@ If an index disappears:
 ``` text
 Rebuild from source of truth
 ```
+
+
+> **As built (2026-11):** a per-vault blind index of HMAC tokens in PostgreSQL (decisions §21), since content is encrypted. Sealed vaults compute the same tokens on the device (roadmap 3.6f).
 
 ------------------------------------------------------------------------
 
@@ -1604,6 +1633,9 @@ Never log:
 -   Private memory contents
 -   Access tokens
 
+
+> **As built (2026-11):** Prometheus metrics on a private management port, JSON logs with request ids, readiness/liveness probes, and alert rules in `deploy/prometheus/lock-alerts.yml` (roadmap 1.5, F3, F6).
+
 ------------------------------------------------------------------------
 
 # 39. Security Threat Model
@@ -1723,6 +1755,9 @@ Shared Vault
 
 This should be decided as a product/legal requirement before finalizing
 the deletion architecture.
+
+
+> **As built (2026-11):** Policy C (decisions §14), pending legal sign-off (roadmap F8). Deleting an account also deletes its Sealed Vault key bundle and wrapped keys.
 
 ------------------------------------------------------------------------
 
@@ -2086,6 +2121,9 @@ Observability
 
 The technology can change. The domain invariants should not.
 
+
+> **As built (2026-11):** Expo (React Native) client; Spring Boot 4 / Java 21; PostgreSQL 17 with Flyway; S3-compatible storage; transactional outbox instead of Kafka; no Redis; self-issued JWT with rotating refresh tokens and TOTP; local or AWS KMS KEK; `@noble/*` audited libraries for client-side crypto. See [`decisions.md`](decisions.md), Stack.
+
 ------------------------------------------------------------------------
 
 # 48. MVP Architecture
@@ -2120,6 +2158,9 @@ A practical first implementation:
 ```
 
 Keep the number of moving pieces small.
+
+
+> **As built (2026-11):** see [`architecture.md`](architecture.md) §9 for the deployment diagram.
 
 ------------------------------------------------------------------------
 

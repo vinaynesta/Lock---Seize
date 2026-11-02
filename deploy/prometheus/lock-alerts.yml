@@ -1,0 +1,113 @@
+# Prometheus alerting rules for the Lock API (roadmap 1.5 "alert rules", follow-ups F3 and F6).
+#
+# Scrape /actuator/prometheus on the private management port (LOCK_MANAGEMENT_PORT); it is refused on
+# the app port. Load this file with `rule_files:` in prometheus.yml, then validate it with:
+#   promtool check rules deploy/prometheus/lock-alerts.yml
+#   promtool test rules deploy/prometheus/lock-alerts.test.yml
+#
+# Every lock_* metric used here is checked against what the API really exports by
+# AlertRulesTest (backend), so a renamed metric fails the build instead of silencing an alert.
+groups:
+  - name: lock-malware-scan
+    rules:
+      # F3: clamd is down. Uploads queue as PENDING_SCAN (never treated as clean) and memories with
+      # them cannot lock, so users notice within minutes.
+      - alert: LockScannerDown
+        expr: max by (instance) (lock_scan_up) == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "clamd is not answering on {{ $labels.instance }}"
+          description: >-
+            The malware scanner has not answered PING for 5 minutes. New uploads wait in PENDING_SCAN
+            and memories containing them cannot lock. Check the clamd sidecar (deploy/clamd.conf).
+
+      # F3: uploads wait too long. Catches a scanner that answers PING but fails every scan, most
+      # often a file over StreamMaxLength (must be >= 2100M, see deploy/clamd.conf).
+      - alert: LockScanBacklogStuck
+        expr: max(lock_scan_oldest_age_seconds) > 1800
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "An upload has waited over 30 minutes for the malware scan"
+          description: >-
+            The oldest PENDING_SCAN upload is {{ $value | humanizeDuration }} old. If clamd is up, look
+            for "ClamAV scan failed" or "size limit exceeded" in the API logs and check StreamMaxLength.
+
+      # F3: the queue keeps growing. Early warning before the age alert fires.
+      - alert: LockScanBacklogGrowing
+        expr: max(lock_scan_pending) > 20 and max(deriv(lock_scan_pending[30m])) > 0
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The malware-scan queue has been growing for 30 minutes"
+          description: "{{ $value }} uploads are waiting for the scan. Scale clamd (MaxThreads) or check for failures."
+
+  - name: lock-storage
+    rules:
+      # F6: decrypted export archives must not outlive the in-app TTL by much.
+      - alert: LockExportLifecycleRuleMissing
+        expr: min(lock_storage_exports_lifecycle) == 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The media bucket does not expire exports/ in time"
+          description: >-
+            Apply deploy/s3-lifecycle.json to the production bucket (see deploy/README.md). Without it,
+            an export the cleanup job misses (a decrypted copy of a vault) stays in storage forever.
+
+      - alert: LockExportLifecycleUnknown
+        expr: min(lock_storage_exports_lifecycle) == -1
+        for: 1h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The API cannot read the media bucket's lifecycle configuration"
+          description: "Grant s3:GetLifecycleConfiguration on the bucket to the API's credentials so the F6 check can run."
+
+  - name: lock-core
+    rules:
+      - alert: LockOutboxDeadEvents
+        expr: max(lock_outbox_dead) > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $value }} outbox events exhausted their retries"
+          description: "Side effects (storage retention, deletes, notifications) did not happen. Inspect outbox_events where attempts >= max."
+
+      - alert: LockOutboxLagging
+        expr: max(lock_outbox_oldest_age_seconds) > 900
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "The oldest outbox event is {{ $value | humanizeDuration }} old"
+
+      - alert: LockSealJobLagging
+        expr: max(lock_seal_lag_seconds) > 3600
+        for: 15m
+        labels:
+          severity: page
+        annotations:
+          summary: "Memories are waiting over an hour past their cooling-off window to seal"
+
+      - alert: LockIntegrityFailure
+        expr: increase(lock_integrity_failures_total[1h]) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "An integrity check found changed or missing locked content"
+          description: "Locked content must never change. Investigate storage immediately; see the audit trail for the asset."
+
+      - alert: LockStaleKekWrapping
+        expr: max(lock_vaults_kek_stale) > 0
+        for: 24h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Vault keys are still wrapped by a retired KEK a day after rotation"

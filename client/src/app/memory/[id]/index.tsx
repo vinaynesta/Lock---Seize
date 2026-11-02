@@ -6,18 +6,35 @@ import { View } from 'react-native';
 
 import { api } from '@/api/lock';
 import type { Asset, Memory } from '@/api/types';
-import { uploadPickedAsset } from '@/api/upload';
+import { assetTypeOf, mimeTypeOf, uploadPickedAsset } from '@/api/upload';
 import { AssetGallery } from '@/components/AssetGallery';
 import { Body, Button, Card, ErrorText, Field, Label, Loading, Screen, StateBadge, Title } from '@/components/ui';
+import { PendingSync } from '@/components/PendingSync';
+import { SealedGate } from '@/components/SealedGate';
+import { uploadSealedFile } from '@/lib/sealedFiles';
+import { addSealedReflection } from '@/lib/sealedVault';
+import { useSealedVault, type SealedState } from '@/lib/useSealed';
 import { confirm } from '@/lib/confirm';
+import { drain, offlineSupported, queueUpload } from '@/lib/offlineQueue';
 import { formatDate, formatDateTime, timeUntil } from '@/lib/format';
 import { space, useTheme } from '@/theme';
 
 export default function MemoryDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const queryClient = useQueryClient();
-  const memory = useQuery({ queryKey: ['memory', id], queryFn: () => api.memory(id) });
+  const memory = useQuery({
+    queryKey: ['memory', id],
+    queryFn: () => api.memory(id),
+    // Uploads are scanned in the background: refresh until every file has a verdict.
+    refetchInterval: (q) => (q.state.data?.assets.some((a) => a.uploadStatus === 'PENDING_SCAN') ? 3000 : false),
+  });
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
+  const vault = useQuery({
+    queryKey: ['vault', memory.data?.vaultId],
+    queryFn: () => api.vault(memory.data!.vaultId),
+    enabled: !!memory.data,
+  });
+  const sealed = useSealedVault(vault.data);
 
   const onUpdated = (m: Memory) => {
     queryClient.setQueryData(['memory', id], m);
@@ -40,7 +57,7 @@ export default function MemoryDetail() {
     <Screen>
       <View style={{ gap: space.sm }}>
         <StateBadge state={m.state} capsule={m.sealedCapsule} />
-        <Title>{m.sealedCapsule ? 'Sealed time capsule' : m.title}</Title>
+        <Title>{m.sealedCapsule ? 'Sealed time capsule' : (m.title ?? '🔒 Encrypted memory')}</Title>
         <Body muted>
           {formatDate(m.occurredAt)}
           {m.location && !m.sealedCapsule ? ` · ${m.location}` : ''}
@@ -59,16 +76,30 @@ export default function MemoryDetail() {
         </>
       )}
 
-      {m.state === 'DRAFT' ? <DraftActions memory={m} onUpdated={onUpdated} /> : <AssetGallery assets={m.assets} />}
+      {m.encrypted && m.title === null && !m.sealedCapsule ? <SealedGate state={sealed} /> : null}
+      {m.state === 'DRAFT' ? (
+        <DraftActions memory={m} onUpdated={onUpdated} sealed={sealed} />
+      ) : (
+        <AssetGallery assets={m.assets} sealed={sealed.status === 'ready' ? { keyVersion: m.encrypted?.keyVersion ?? sealed.keyVersion, memoryId: m.id, vaultId: m.vaultId } : undefined} />
+      )}
       {m.state === 'SEALING' ? <SealingPanel memory={m} isCreator={isCreator} onUpdated={onUpdated} /> : null}
       {(m.state === 'LOCKED' || m.state === 'ARCHIVED') && !m.sealedCapsule ? (
-        <LockedPanel memory={m} isCreator={isCreator} onUpdated={onUpdated} />
+        <LockedPanel memory={m} isCreator={isCreator} onUpdated={onUpdated} sealed={sealed} />
       ) : null}
     </Screen>
   );
 }
 
-function DraftActions({ memory, onUpdated }: { memory: Memory; onUpdated: (m: Memory) => void }) {
+function DraftActions({
+  memory,
+  onUpdated,
+  sealed,
+}: {
+  memory: Memory;
+  onUpdated: (m: Memory) => void;
+  sealed: SealedState;
+}) {
+  const sealedVault = sealed.status !== 'server';
   const queryClient = useQueryClient();
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<unknown>(null);
@@ -90,8 +121,22 @@ function DraftActions({ memory, onUpdated }: { memory: Memory; onUpdated: (m: Me
     if (result.canceled) return;
     setUploading(true);
     try {
-      for (const picked of result.assets) {
-        await uploadPickedAsset(memory.id, picked);
+      if (sealedVault) {
+        if (sealed.status !== 'ready') throw new Error('Unlock your Sealed Vault keys first.');
+        // Encrypted on this device, then uploaded; nothing plaintext is queued or sent.
+        for (const picked of result.assets) {
+          await uploadSealedFile(memory.vaultId, sealed.keyVersion, memory.id, picked.uri, assetTypeOf(picked), mimeTypeOf(picked));
+        }
+      } else if (offlineSupported) {
+        // Copied to app storage and uploaded in the background: survives going offline or closing the app.
+        for (const picked of result.assets) {
+          await queueUpload(memory.id, picked.uri, assetTypeOf(picked), mimeTypeOf(picked));
+        }
+        await drain();
+      } else {
+        for (const picked of result.assets) {
+          await uploadPickedAsset(memory.id, picked);
+        }
       }
     } catch (e) {
       setUploadError(e);
@@ -113,8 +158,14 @@ function DraftActions({ memory, onUpdated }: { memory: Memory; onUpdated: (m: Me
 
   return (
     <View style={{ gap: space.lg }}>
-      <AssetGallery assets={memory.assets} onRemove={(a) => removeAsset.mutate(a)} />
-      <Button title={uploading ? 'Uploading…' : 'Add photos or videos'} variant="secondary" onPress={pick} loading={uploading} />
+      <AssetGallery
+        assets={memory.assets}
+        onRemove={(a) => removeAsset.mutate(a)}
+        sealed={sealed.status === 'ready' ? { keyVersion: memory.encrypted?.keyVersion ?? sealed.keyVersion, memoryId: memory.id, vaultId: memory.vaultId } : undefined}
+      />
+      <PendingSync />
+      <Button title={uploading ? (sealedVault ? 'Encrypting and uploading…' : 'Uploading…') : 'Add photos or videos'} variant="secondary" onPress={pick} loading={uploading} />
+      {sealedVault ? <Body muted style={{ fontSize: 13 }}>🔒 Encrypted on this device before upload. Not virus-scanned: only members can open it.</Body> : null}
       <ErrorText error={uploadError ?? removeAsset.error} />
 
       <Button
@@ -133,7 +184,7 @@ function DraftActions({ memory, onUpdated }: { memory: Memory; onUpdated: (m: Me
         <Button
           title="Lock"
           loading={lock.isPending}
-          disabled={uploading}
+          disabled={uploading || memory.assets.some((a) => a.uploadStatus === 'PENDING_SCAN')}
           onPress={() =>
             confirm(
               'Lock this memory?',
@@ -175,19 +226,35 @@ function SealingPanel({ memory, isCreator, onUpdated }: { memory: Memory; isCrea
   );
 }
 
-function LockedPanel({ memory, isCreator, onUpdated }: { memory: Memory; isCreator: boolean; onUpdated: (m: Memory) => void }) {
+function LockedPanel({
+  memory,
+  isCreator,
+  onUpdated,
+  sealed,
+}: {
+  memory: Memory;
+  isCreator: boolean;
+  onUpdated: (m: Memory) => void;
+  sealed: SealedState;
+}) {
   const queryClient = useQueryClient();
   const t = useTheme();
   const [reflection, setReflection] = useState('');
   const [showProof, setShowProof] = useState(false);
-  const reflections = useQuery({ queryKey: ['reflections', memory.id], queryFn: () => api.reflections(memory.id) });
+  const reflections = useQuery({
+    queryKey: ['reflections', memory.id, sealed.status],
+    queryFn: () => api.reflections(memory.id, memory.vaultId),
+  });
   const integrity = useQuery({
     queryKey: ['integrity', memory.id],
     queryFn: () => api.integrity(memory.id),
     enabled: showProof,
   });
   const addReflection = useMutation({
-    mutationFn: () => api.addReflection(memory.id, reflection.trim()),
+    mutationFn: () =>
+      sealed.status === 'ready'
+        ? addSealedReflection(memory.vaultId, sealed.keyVersion, memory.id, reflection.trim())
+        : api.addReflection(memory.id, reflection.trim()),
     onSuccess: () => {
       setReflection('');
       queryClient.invalidateQueries({ queryKey: ['reflections', memory.id] });
@@ -214,7 +281,7 @@ function LockedPanel({ memory, isCreator, onUpdated }: { memory: Memory; isCreat
             <Body muted style={{ fontSize: 13 }}>
               {formatDate(r.createdAt)}
             </Body>
-            <Body>{r.body}</Body>
+            <Body>{r.body ?? '🔒 Encrypted'}</Body>
           </Card>
         ))}
         <Field
@@ -231,7 +298,7 @@ function LockedPanel({ memory, isCreator, onUpdated }: { memory: Memory; isCreat
           variant="secondary"
           onPress={() => addReflection.mutate()}
           loading={addReflection.isPending}
-          disabled={!reflection.trim()}
+          disabled={!reflection.trim() || (sealed.status !== 'server' && sealed.status !== 'ready')}
         />
       </View>
 

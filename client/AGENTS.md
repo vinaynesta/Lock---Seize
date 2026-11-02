@@ -46,3 +46,4 @@ Docs: https://docs.expo.dev/eas/index.md
 - Server state goes through TanStack Query; auth lives in `src/lib/session.tsx` (token in SecureStore, sessionStorage on web).
 - Auth gating uses `Stack.Protected` in `src/app/_layout.tsx`. Register every new screen there under the right guard.
 - Locked memories are immutable: never add UI that edits or deletes a non-DRAFT memory outside the deletion-request flow.
+- Sealed (end-to-end encrypted) vaults: all crypto lives in `src/lib/sealed*.ts` and `src/lib/deviceApproval.ts`, using only `@noble/*` and `@scure/bip39`. Import `src/lib/cryptoRandom.ts` before any `@noble/*` module (it supplies secure randomness on native). Never send plaintext of a sealed vault to the API, never log keys, and keep byte formats in step with `backend/.../crypto/E2eFormats.java`. Architecture: `../docs/architecture.md` §7.

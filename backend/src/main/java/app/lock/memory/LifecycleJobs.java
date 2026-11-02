@@ -1,5 +1,6 @@
 package app.lock.memory;
 
+import app.lock.identity.PasswordResetService;
 import app.lock.identity.RefreshTokenService;
 import app.lock.media.MediaService;
 import org.slf4j.Logger;
@@ -20,11 +21,13 @@ class LifecycleJobs {
     private final MemoryService memories;
     private final MediaService media;
     private final RefreshTokenService refreshTokens;
+    private final PasswordResetService resets;
 
-    LifecycleJobs(MemoryService memories, MediaService media, RefreshTokenService refreshTokens) {
+    LifecycleJobs(MemoryService memories, MediaService media, RefreshTokenService refreshTokens, PasswordResetService resets) {
         this.memories = memories;
         this.media = media;
         this.refreshTokens = refreshTokens;
+        this.resets = resets;
     }
 
     @Scheduled(fixedDelayString = "PT1M")
@@ -57,5 +60,6 @@ class LifecycleJobs {
         if (n > 0) {
             log.info("Deleted {} expired refresh tokens", n);
         }
+        resets.deleteExpired();
     }
 }

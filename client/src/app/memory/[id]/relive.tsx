@@ -36,10 +36,14 @@ export default function Relive() {
         You locked this memory {timeAgo(daysSinceLocked)}.
       </Body>
 
-      <AssetGallery assets={m.assets} />
+      <AssetGallery
+        assets={m.assets}
+        variant="PREVIEW"
+        sealed={m.encrypted ? { keyVersion: m.encrypted.keyVersion, memoryId: m.id, vaultId: m.vaultId } : undefined}
+      />
 
       <View style={{ gap: space.sm }}>
-        <Title>{m.title}</Title>
+        <Title>{m.title ?? '🔒 Encrypted memory'}</Title>
         <Body muted>
           {formatDate(m.occurredAt)}
           {m.location ? ` · ${m.location}` : ''}
@@ -62,7 +66,7 @@ export default function Relive() {
               <Body muted style={{ fontSize: 13 }}>
                 {formatDate(r.createdAt)}
               </Body>
-              <Body>{r.body}</Body>
+              <Body>{r.body ?? '🔒 Encrypted'}</Body>
             </Card>
           ))}
         </View>

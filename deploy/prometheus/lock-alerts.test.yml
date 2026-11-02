@@ -1,0 +1,31 @@
+# Unit tests for lock-alerts.yml:  promtool test rules deploy/prometheus/lock-alerts.test.yml
+rule_files:
+  - lock-alerts.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'lock_scan_up{instance="api-1"}'
+        values: '1 1 0x10'
+      - series: 'lock_scan_oldest_age_seconds{instance="api-1"}'
+        values: '0+120x30'          # grows 2 minutes per minute: a stuck queue
+      - series: 'lock_storage_exports_lifecycle{instance="api-1"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: LockScannerDown
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: LockScannerDown
+        exp_alerts:
+          - exp_labels: { severity: page, instance: api-1 }
+            exp_annotations:
+              summary: "clamd is not answering on api-1"
+              description: "The malware scanner has not answered PING for 5 minutes. New uploads wait in PENDING_SCAN and memories containing them cannot lock. Check the clamd sidecar (deploy/clamd.conf)."
+      - eval_time: 20m
+        alertname: LockExportLifecycleRuleMissing
+        exp_alerts:
+          - exp_labels: { severity: ticket }
+            exp_annotations:
+              summary: "The media bucket does not expire exports/ in time"
+              description: "Apply deploy/s3-lifecycle.json to the production bucket (see deploy/README.md). Without it, an export the cleanup job misses (a decrypted copy of a vault) stays in storage forever."

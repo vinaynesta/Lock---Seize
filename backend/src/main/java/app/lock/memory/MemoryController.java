@@ -1,6 +1,7 @@
 package app.lock.memory;
 
 import app.lock.common.CurrentUser;
+import app.lock.identity.MfaController;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -40,6 +42,9 @@ public class MemoryController {
     public MemoryView create(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID vaultId,
                              @RequestHeader(value = "Idempotency-Key", required = false) @Size(max = 100) String idempotencyKey,
                              @Valid @RequestBody MemoryRequest req) {
+        if (req.sealed() != null) {
+            return memories.createWithId(vaultId, CurrentUser.id(jwt), req.id(), req.toContent(), idempotencyKey);
+        }
         return memories.create(vaultId, CurrentUser.id(jwt), req.toContent(), idempotencyKey);
     }
 
@@ -122,6 +127,13 @@ public class MemoryController {
     @ResponseStatus(HttpStatus.CREATED)
     public MemoryService.ReflectionView addReflection(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID memoryId,
                                                       @Valid @RequestBody ReflectionRequest req) {
+        if (req.sealedBody() != null) {
+            return memories.addSealedReflection(memoryId, CurrentUser.id(jwt), req.id(),
+                    req.keyVersion() == null ? -1 : req.keyVersion(), req.sealedBody());
+        }
+        if (req.body() == null || req.body().isBlank()) {
+            throw app.lock.common.ApiException.badRequest("VALIDATION_FAILED", "body: must not be blank");
+        }
         return memories.addReflection(memoryId, CurrentUser.id(jwt), req.body());
     }
 
@@ -133,8 +145,9 @@ public class MemoryController {
     @PostMapping("/memories/{memoryId}/deletion-request")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public MemoryService.DeletionView requestDeletion(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID memoryId,
-                                                      @Valid @RequestBody DeletionRequestBody req) {
-        return memories.requestDeletion(memoryId, CurrentUser.id(jwt), req.password(), req.reason());
+                                                      @Valid @RequestBody DeletionRequestBody req,
+                                                      @RequestHeader(name = MfaController.HEADER, required = false) String mfaCode) {
+        return memories.requestDeletion(memoryId, CurrentUser.id(jwt), req.password(), mfaCode, req.reason());
     }
 
     @DeleteMapping("/memories/{memoryId}/deletion-request")
@@ -142,20 +155,65 @@ public class MemoryController {
         return memories.cancelDeletion(memoryId, CurrentUser.id(jwt));
     }
 
+    /** Search a vault (roadmap 3.4): every word must match; words of 3+ letters also match as prefixes. */
+    @GetMapping("/vaults/{vaultId}/search")
+    public List<MemoryView> search(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID vaultId,
+                                   @RequestParam("q") @Size(max = 200) String query,
+                                   @RequestParam(defaultValue = "50") int limit) {
+        return memories.search(vaultId, CurrentUser.id(jwt), query, limit);
+    }
+
+    /**
+     * Plaintext fields for a server-side vault ({@code title} required). A sealed vault (roadmap 3.6)
+     * sends {@code sealed} instead, plus, on create, the {@code id} the ciphertext was encrypted for.
+     */
     public record MemoryRequest(
-            @NotBlank @Size(max = 200) String title,
+            UUID id,
+            @Size(max = 200) String title,
             @Size(max = 20_000) String thought,
             @Size(max = 200) String feeling,
             @Size(max = 300) String location,
             Instant occurredAt,
-            Instant revealAt) {
+            Instant revealAt,
+            @Valid SealedFields sealed) {
 
         MemoryService.Content toContent() {
-            return new MemoryService.Content(title, thought, feeling, location, occurredAt, revealAt);
+            return new MemoryService.Content(title, thought, feeling, location, occurredAt, revealAt,
+                    sealed == null ? null : sealed.toContent());
         }
     }
 
-    public record ReflectionRequest(@NotBlank @Size(max = 10_000) String body) {}
+    /** Base64 ciphertexts; length limits are checked against the plaintext limits in E2eFormats. */
+    /** {@code searchTokens}: base64 16-byte blind tokens computed on the device (roadmap 3.6f); optional. */
+    public record SealedFields(int keyVersion, @Size(max = 300) String title, @Size(max = 110_000) String thought,
+                               @Size(max = 1_200) String feeling, @Size(max = 1_700) String location,
+                               List<String> searchTokens) {
+        MemoryService.SealedContent toContent() {
+            return new MemoryService.SealedContent(keyVersion, title, thought, feeling, location, searchTokens);
+        }
+    }
+
+    /** Sealed vault search (roadmap 3.6f): per query word, the candidate tokens the device computed. */
+    @PostMapping("/vaults/{vaultId}/search")
+    public List<MemoryView> searchSealed(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID vaultId,
+                                         @RequestBody SealedSearchRequest req) {
+        return memories.searchSealed(vaultId, CurrentUser.id(jwt), req.words(), req.limit() == null ? 50 : req.limit());
+    }
+
+    @PutMapping("/memories/{memoryId}/search-tokens")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void replaceSearchTokens(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID memoryId,
+                                    @RequestBody SearchTokensRequest req) {
+        memories.replaceSealedSearchTokens(memoryId, CurrentUser.id(jwt), req.tokens());
+    }
+
+    public record SealedSearchRequest(List<List<String>> words, Integer limit) {}
+
+    public record SearchTokensRequest(List<String> tokens) {}
+
+    /** {@code body} for a server-side vault; {@code id}, {@code keyVersion} and {@code sealedBody} in a sealed one. */
+    public record ReflectionRequest(@Size(max = 10_000) String body, UUID id, Integer keyVersion,
+                                    @Size(max = 55_000) String sealedBody) {}
 
     public record DeletionRequestBody(@NotBlank String password, @Size(max = 500) String reason) {}
 }
