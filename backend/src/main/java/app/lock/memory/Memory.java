@@ -83,9 +83,10 @@ public class Memory {
         this.updatedAt = now;
     }
 
-    void writeContent(byte[] titleCt, byte[] thoughtCt, byte[] feelingCt, byte[] locationCt,
+    void writeContent(int keyVersion, byte[] titleCt, byte[] thoughtCt, byte[] feelingCt, byte[] locationCt,
                       Instant occurredAt, Instant revealAt, Instant now) {
         requireState(MemoryState.DRAFT, "Only drafts can be edited");
+        this.keyVersion = keyVersion;
         this.titleCt = titleCt;
         this.thoughtCt = thoughtCt;
         this.feelingCt = feelingCt;

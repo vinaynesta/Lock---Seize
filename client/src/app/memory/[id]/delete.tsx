@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { ApiError } from '@/api/client';
 import { api } from '@/api/lock';
 import type { DeletionRequest } from '@/api/types';
+import { MfaCodeField, useMfaEnabled } from '@/components/MfaCodeField';
 import { Body, Button, Card, ErrorText, Field, Screen } from '@/components/ui';
 import { formatDate } from '@/lib/format';
 
@@ -17,12 +18,15 @@ export default function RequestDeletion() {
   const queryClient = useQueryClient();
   const [password, setPassword] = useState('');
   const [reason, setReason] = useState('');
+  const [code, setCode] = useState('');
+  const mfaOn = useMfaEnabled();
   const [pending, setPending] = useState<DeletionRequest | null>(null);
 
   const request = useMutation({
-    mutationFn: () => api.requestDeletion(id, password, reason.trim() || undefined),
+    mutationFn: () => api.requestDeletion(id, password, reason.trim() || undefined, code),
     onSuccess: (d) => {
       setPassword('');
+      setCode('');
       setPending(d);
     },
   });
@@ -63,6 +67,7 @@ export default function RequestDeletion() {
         cancel at any time before then.
       </Body>
       <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry autoComplete="current-password" />
+      <MfaCodeField value={code} onChangeText={setCode} />
       <Field label="Reason (optional, private)" value={reason} onChangeText={setReason} maxLength={500} />
       <ErrorText error={request.error} />
       <Button
@@ -70,7 +75,7 @@ export default function RequestDeletion() {
         variant="danger"
         onPress={() => request.mutate()}
         loading={request.isPending}
-        disabled={!password}
+        disabled={!password || (mfaOn && !code.trim())}
       />
     </Screen>
   );

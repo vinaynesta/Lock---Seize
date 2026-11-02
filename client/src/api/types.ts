@@ -2,11 +2,37 @@
 
 export type VaultType = 'PERSONAL' | 'SHARED';
 export type VaultState = 'ACTIVE' | 'DORMANT';
+/** SEALED: end-to-end encrypted (roadmap 3.6). The server only ever has ciphertext. */
+export type VaultEncryption = 'SERVER' | 'SEALED';
 export type MemberRole = 'OWNER' | 'MEMBER';
 export type MemberStatus = 'INVITED' | 'ACTIVE' | 'DECLINED' | 'REMOVED' | 'LEFT';
 export type MemoryState = 'DRAFT' | 'SEALING' | 'LOCKED' | 'ARCHIVED';
 export type AssetType = 'PHOTO' | 'VIDEO' | 'AUDIO';
-export type UploadStatus = 'INITIATED' | 'VERIFIED' | 'VERIFICATION_FAILED' | 'ATTACHED' | 'EXPIRED';
+export type UploadStatus =
+  | 'INITIATED'
+  | 'PENDING_SCAN'
+  | 'VERIFIED'
+  | 'VERIFICATION_FAILED'
+  | 'REJECTED'
+  | 'ATTACHED'
+  | 'EXPIRED';
+/**
+ * Renditions: THUMB (256 px) and PREVIEW (1024 px) JPEGs of a photo or a video still, and PLAYBACK,
+ * an H.264/AAC MP4 of a video or audio file that plays on every device.
+ */
+export type AssetVariant = 'THUMB' | 'PREVIEW' | 'PLAYBACK';
+export type ExportStatus = 'QUEUED' | 'READY' | 'FAILED' | 'EXPIRED';
+export type DevicePlatform = 'IOS' | 'ANDROID' | 'WEB';
+/** DELETION_REMINDER is a safety feature and cannot be turned off. */
+export type NotificationCategory =
+  | 'MEMORY_LOCKED'
+  | 'CAPSULE_REVEALED'
+  | 'ON_THIS_DAY'
+  | 'VAULT_INVITATION'
+  | 'ASSET_REJECTED'
+  | 'EXPORT_READY'
+  | 'DELETION_REMINDER';
+export type NotificationPreferences = Record<NotificationCategory, boolean>;
 
 export interface TokenResponse {
   accessToken: string;
@@ -14,6 +40,31 @@ export interface TokenResponse {
   expiresAt: string;
   refreshToken: string;
   refreshExpiresAt: string;
+}
+
+/** Login answer when two-step verification is on: no session yet, send a code with this token. */
+export interface MfaChallenge {
+  mfaRequired: true;
+  mfaToken: string;
+  mfaTokenExpiresAt: string;
+}
+
+export interface StorageUsage {
+  plan: string;
+  usedBytes: number;
+  limitBytes: number;
+  remainingBytes: number;
+}
+
+export interface MfaStatus {
+  enabled: boolean;
+  enabledAt: string | null;
+  recoveryCodesLeft: number;
+}
+
+export interface MfaSetup {
+  secret: string;
+  otpauthUri: string;
 }
 
 export interface Me {
@@ -29,7 +80,50 @@ export interface Vault {
   name: string;
   ownerId: string;
   state: VaultState;
+  encryption: VaultEncryption;
+  keyVersion: number;
   createdAt: string;
+}
+
+/** Sealed Vault key bundle: public key plus the secret key wrapped twice. Opaque to the server. */
+export interface KeyBundle {
+  publicKey: string;
+  fingerprint: string;
+  wrappedByPassphrase: string;
+  passphraseKdf: import('@/lib/sealed').Kdf;
+  wrappedByRecovery: string;
+  recoveryKdf: import('@/lib/sealed').Kdf;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A new device waiting to be approved by an unlocked one (roadmap 3.6e). */
+export interface DeviceApproval {
+  id: string;
+  requestKey: string;
+  fingerprint: string;
+  deviceName: string | null;
+  approved: boolean;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface VaultKeyState {
+  vaultId: string;
+  currentVersion: number;
+  myKeys: { keyVersion: number; wrappedKey: string; wrappedBy: string; createdAt: string }[];
+  members: { userId: string; publicKey: string; fingerprint: string }[];
+  /** Active members who don't have the current version yet. */
+  missingCurrent: string[];
+}
+
+/** Sealed vault content as stored: base64 AES-GCM under vault key `keyVersion`. */
+export interface EncryptedFields {
+  keyVersion: number;
+  title: string;
+  thought: string | null;
+  feeling: string | null;
+  location: string | null;
 }
 
 export interface Member {
@@ -39,6 +133,8 @@ export interface Member {
   status: MemberStatus;
   invitedAt: string | null;
   joinedAt: string | null;
+  /** Set on the member list. A deleted account shows as "Former member". */
+  displayName: string | null;
 }
 
 export interface Asset {
@@ -49,6 +145,34 @@ export interface Asset {
   checksumSha256: string;
   uploadStatus: UploadStatus;
   createdAt: string;
+  /** Derivatives that exist; empty means only the original is available. */
+  variants: AssetVariant[];
+}
+
+export interface AssetDownload {
+  url: string;
+  /** The derivative served, or null for the original. */
+  variant: AssetVariant | null;
+}
+
+export interface VaultExport {
+  id: string;
+  vaultId: string;
+  status: ExportStatus;
+  sizeBytes: number | null;
+  memoryCount: number | null;
+  assetCount: number | null;
+  error: string | null;
+  requestedAt: string;
+  completedAt: string | null;
+  expiresAt: string | null;
+}
+
+export interface AccountDeletion {
+  id: string;
+  status: 'PENDING' | 'CANCELLED' | 'COMPLETED';
+  requestedAt: string;
+  executeAfter: string;
 }
 
 export interface Memory {
@@ -68,6 +192,8 @@ export interface Memory {
   contentHash: string | null;
   createdAt: string;
   assets: Asset[];
+  /** Set in sealed vaults (the plaintext fields are then null until decrypted on the device). */
+  encrypted?: EncryptedFields | null;
 }
 
 export interface MemoryInput {
@@ -82,8 +208,11 @@ export interface MemoryInput {
 export interface Reflection {
   id: string;
   authorId: string;
-  body: string;
+  body: string | null;
   createdAt: string;
+  /** Sealed vaults: the body encrypted under vault key `keyVersion`, decrypted on the device. */
+  keyVersion?: number | null;
+  sealedBody?: string | null;
 }
 
 export interface Relive {

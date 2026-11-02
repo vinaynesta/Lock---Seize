@@ -1,3 +1,4 @@
+import '@/lib/cryptoRandom'; // must be first: secure randomness for @noble/* on native
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -38,7 +39,11 @@ function RootStack() {
       <Stack.Protected guard={!signedIn}>
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />
         <Stack.Screen name="sign-up" options={{ title: 'Create account' }} />
+        <Stack.Screen name="forgot-password" options={{ title: 'Forgot password' }} />
       </Stack.Protected>
+
+      {/* Reachable signed in or not: the emailed link may be opened on a device that is signed in. */}
+      <Stack.Screen name="reset-password" options={{ title: 'Choose a new password' }} />
 
       <Stack.Protected guard={signedIn}>
         <Stack.Screen name="index" options={{ title: 'Lock' }} />
@@ -50,7 +55,13 @@ function RootStack() {
         <Stack.Screen name="memory/[id]/edit" options={{ title: 'Edit draft', presentation: 'modal' }} />
         <Stack.Screen name="memory/[id]/relive" options={{ title: 'Relive' }} />
         <Stack.Screen name="memory/[id]/delete" options={{ title: 'Request deletion', presentation: 'modal' }} />
+        <Stack.Screen name="vault/[id]/export" options={{ title: 'Export' }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
+        <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
+        <Stack.Screen name="two-step" options={{ title: 'Two-step verification' }} />
+        <Stack.Screen name="sealed-keys" options={{ title: 'Sealed Vault keys' }} />
+        <Stack.Screen name="approve-device" options={{ title: 'Approve a device', presentation: 'modal' }} />
+        <Stack.Screen name="delete-account" options={{ title: 'Delete account', presentation: 'modal' }} />
       </Stack.Protected>
     </Stack>
   );

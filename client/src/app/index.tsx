@@ -78,6 +78,7 @@ export default function Home() {
             <Body style={{ fontSize: 18, fontWeight: '600' }}>{v.name}</Body>
             <Body muted>
               {v.type === 'PERSONAL' ? 'Private · only you' : 'Shared'}
+              {v.encryption === 'SEALED' ? ' · 🔒 Sealed' : ''}
               {v.state === 'DORMANT' ? ' · dormant' : ''}
             </Body>
           </Card>

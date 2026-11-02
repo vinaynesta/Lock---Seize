@@ -1,6 +1,7 @@
 package app.lock.media.storage;
 
 import app.lock.config.LockProperties;
+import java.io.InputStream;
 import java.net.URI;
 import java.time.Instant;
 import java.util.HashMap;
@@ -11,18 +12,28 @@ import org.springframework.stereotype.Component;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.model.ChecksumMode;
+import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.ExpirationStatus;
+import software.amazon.awssdk.services.s3.model.GetBucketLifecycleConfigurationRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.HeadObjectResponse;
+import software.amazon.awssdk.services.s3.model.LifecycleRule;
+import software.amazon.awssdk.services.s3.model.LifecycleRuleFilter;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.ObjectLockRetentionMode;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRetentionRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectTaggingRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
+import software.amazon.awssdk.services.s3.model.Tag;
+import software.amazon.awssdk.services.s3.model.Tagging;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedPutObjectRequest;
 
@@ -99,12 +110,83 @@ public class S3ObjectStorage implements ObjectStorage {
     }
 
     @Override
+    public InputStream read(String key) {
+        return s3.getObject(GetObjectRequest.builder().bucket(props.bucket()).key(key).build());
+    }
+
+    @Override
+    public void write(String key, InputStream bytes, long sizeBytes, String contentType) {
+        s3.putObject(PutObjectRequest.builder()
+                        .bucket(props.bucket())
+                        .key(key)
+                        .contentType(contentType)
+                        .contentLength(sizeBytes)
+                        .build(),
+                RequestBody.fromInputStream(bytes, sizeBytes));
+    }
+
+    @Override
+    public void quarantine(String key) {
+        s3.copyObject(CopyObjectRequest.builder()
+                .sourceBucket(props.bucket()).sourceKey(key)
+                .destinationBucket(props.bucket()).destinationKey(QUARANTINE_PREFIX + key)
+                .build());
+        delete(key);
+    }
+
+    @Override
     public void protect(String key, Instant retainUntil) {
         s3.putObjectRetention(PutObjectRetentionRequest.builder()
                 .bucket(props.bucket())
                 .key(key)
                 .retention(r -> r.mode(ObjectLockRetentionMode.GOVERNANCE).retainUntilDate(retainUntil))
                 .build());
+    }
+
+    @Override
+    public void markCold(String key) {
+        s3.putObjectTagging(PutObjectTaggingRequest.builder()
+                .bucket(props.bucket())
+                .key(key)
+                .tagging(Tagging.builder().tagSet(Tag.builder().key(COLD_TIER_TAG).value(COLD_TIER_VALUE).build()).build())
+                .build());
+    }
+
+    @Override
+    public java.util.OptionalInt lifecycleExpiryDays(String prefix) {
+        java.util.List<LifecycleRule> rules;
+        try {
+            rules = s3.getBucketLifecycleConfiguration(GetBucketLifecycleConfigurationRequest.builder()
+                    .bucket(props.bucket()).build()).rules();
+        } catch (S3Exception e) {
+            if ("NoSuchLifecycleConfiguration".equals(e.awsErrorDetails() == null ? null : e.awsErrorDetails().errorCode())) {
+                return java.util.OptionalInt.empty();
+            }
+            throw e;
+        }
+        return rules.stream()
+                .filter(r -> r.status() == ExpirationStatus.ENABLED)
+                .filter(r -> r.expiration() != null && r.expiration().days() != null)
+                .filter(r -> covers(ruleFilterPrefix(r), prefix))
+                .mapToInt(r -> r.expiration().days())
+                .min();
+    }
+
+    /** The rule's prefix, or null if it filters on something else (tags, sizes) and so can't be trusted. */
+    @SuppressWarnings("deprecation") // the top-level Prefix is legacy but still returned by some stores
+    static String ruleFilterPrefix(LifecycleRule rule) {
+        LifecycleRuleFilter f = rule.filter();
+        if (f == null) {
+            return rule.prefix() == null ? "" : rule.prefix();
+        }
+        if (f.tag() != null || f.and() != null || f.objectSizeGreaterThan() != null || f.objectSizeLessThan() != null) {
+            return null;
+        }
+        return f.prefix() == null ? "" : f.prefix();
+    }
+
+    static boolean covers(String rulePrefix, String prefix) {
+        return rulePrefix != null && prefix.startsWith(rulePrefix);
     }
 
     @Override

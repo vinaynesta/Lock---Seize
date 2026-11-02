@@ -80,7 +80,7 @@ function refreshTokens(): Promise<RefreshResult> {
   return refreshing;
 }
 
-type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 export async function request<T>(
   method: Method,
@@ -128,8 +128,13 @@ export async function requestWithHeaders<T>(
     const p = problem ?? { status: res.status };
     throw new ApiError(res.status, p.code, p.detail ?? `Request failed (${res.status})`);
   }
-  if (res.status === 204) {
+  // 204, and 202 without a body (e.g. a device approval still pending), carry no JSON.
+  if (res.status === 204 || (res.status === 202 && res.headers.get('Content-Length') !== null && res.headers.get('Content-Length') === '0')) {
     return { data: undefined as T, headers: res.headers };
+  }
+  if (res.status === 202) {
+    const text = await res.text();
+    return { data: (text ? JSON.parse(text) : undefined) as T, headers: res.headers };
   }
   return { data: (await res.json()) as T, headers: res.headers };
 }

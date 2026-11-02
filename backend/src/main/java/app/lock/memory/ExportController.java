@@ -1,6 +1,8 @@
 package app.lock.memory;
 
 import app.lock.common.CurrentUser;
+import app.lock.identity.MfaController;
+import app.lock.identity.MfaService;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -9,6 +11,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -22,14 +25,18 @@ public class ExportController {
     private static final int PAGE_SIZE = 200;
 
     private final MemoryService memories;
+    private final MfaService mfa;
 
-    public ExportController(MemoryService memories) {
+    public ExportController(MemoryService memories, MfaService mfa) {
         this.memories = memories;
+        this.mfa = mfa;
     }
 
     @GetMapping("/vaults/{vaultId}/export")
-    public VaultExport export(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID vaultId) {
+    public VaultExport export(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID vaultId,
+                              @RequestHeader(name = MfaController.HEADER, required = false) String mfaCode) {
         UUID userId = CurrentUser.id(jwt);
+        mfa.require(userId, mfaCode);
         // Walk the whole vault page by page: an export must never be silently truncated.
         List<ExportedMemory> exported = new ArrayList<>();
         TimelineCursor cursor = null;
