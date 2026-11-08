@@ -44,7 +44,13 @@ public record LockProperties(
      * endpoint. {@code maxFailedLogins} wrong passwords within {@code lockout} lock that account
      * (and, separately, re-authentication for that user) until the window passes.
      */
-    public record RateLimit(int authRequestsPerMinute, int maxFailedLogins, Duration lockout) {}
+    /**
+     * {@code maxFailedLogins}: wrong passwords for one account from one IP before that IP is locked out
+     * of it. {@code maxFailedLoginsPerAccount}: from all IPs together, a backstop against a botnet.
+     * {@code store}: {@code memory} (one instance) or {@code postgres} (shared; needed with several).
+     */
+    public record RateLimit(int authRequestsPerMinute, int maxFailedLogins, int maxFailedLoginsPerAccount, Duration lockout,
+                            String store) {}
 
     public record Memory(Duration coolingOff, Duration deletionGracePeriod, Duration uploadExpiry) {}
 

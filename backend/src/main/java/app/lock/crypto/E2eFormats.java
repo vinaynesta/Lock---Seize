@@ -10,13 +10,17 @@ import java.util.Map;
  * a buggy client from storing something no device could ever open. Layouts (client: lib/sealed.ts):
  * <ul>
  *   <li>wrapped secret key: {@code 0x01 || nonce(12) || AES-GCM(32-byte key) + tag(16)} = 61 bytes</li>
- *   <li>wrapped vault key: {@code 0x01 || ephemeral X25519 public key(32) || nonce(12) || ct(32) + tag(16)} = 93 bytes</li>
+ *   <li>wrapped vault key: {@code 0x02 || ephemeral X25519 public key(32) || nonce(12) || ct(32) + tag(16)} = 93 bytes.
+ *       Version 2 (security review F2) authenticates the wrapping member: the AES key is derived from both
+ *       the ephemeral and the sender's static X25519 key. Version-1 copies already stored stay readable,
+ *       but new uploads must be version 2.</li>
  *   <li>content field: {@code nonce(12) || ciphertext + tag(16)}, the same layout as server-side content</li>
  * </ul>
  */
 public final class E2eFormats {
 
     public static final int FORMAT_V1 = 1;
+    public static final int VAULT_KEY_FORMAT_V2 = 2;
     public static final int PUBLIC_KEY_BYTES = 32;
     public static final int WRAPPED_SECRET_KEY_BYTES = 1 + 12 + 32 + 16;
     public static final int WRAPPED_VAULT_KEY_BYTES = 1 + 32 + 12 + 32 + 16;
@@ -69,7 +73,15 @@ public final class E2eFormats {
     }
 
     public static byte[] wrappedVaultKey(String base64, String field) {
-        return versioned(decode(base64, field), WRAPPED_VAULT_KEY_BYTES, field);
+        byte[] blob = decode(base64, field);
+        if (blob.length == WRAPPED_VAULT_KEY_BYTES && blob[0] == FORMAT_V1) {
+            throw ApiException.badRequest("LEGACY_KEY_FORMAT",
+                    field + " uses the unauthenticated version-1 wrap; update the app to share vault keys");
+        }
+        if (blob.length != WRAPPED_VAULT_KEY_BYTES || blob[0] != VAULT_KEY_FORMAT_V2) {
+            throw invalid(field, "must be a version-2 wrapped key of " + WRAPPED_VAULT_KEY_BYTES + " bytes");
+        }
+        return blob;
     }
 
     /** One encrypted content field; null stays null unless {@code required}. */

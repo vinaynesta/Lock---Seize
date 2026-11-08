@@ -10,7 +10,7 @@ import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
-/** Roadmap 1.2: per-IP limits on auth endpoints and per-account lockout after failed passwords. */
+/** Roadmap 1.2: per-IP limits on auth endpoints, and lockouts after failed passwords (per account and IP, plus an account backstop). */
 class RateLimitIntegrationTest extends IntegrationTest {
 
     @Test
@@ -19,7 +19,7 @@ class RateLimitIntegrationTest extends IntegrationTest {
                 {"email":"nobody@example.com","password":"x"}""";
         for (int i = 0; i < 20; i++) {
             mvc.perform(json(post("/auth/login"), body).with(from("10.0.0.1"))).andExpect(status().isUnauthorized());
-            rateLimiter.reset("fail:login:nobody@example.com"); // isolate the IP limit from the account lockout
+            rateLimiter.resetPrefix("fail:login:nobody@example.com"); // isolate the IP limit from the lockouts
         }
         mvc.perform(json(post("/auth/login"), body).with(from("10.0.0.1")))
                 .andExpect(status().isTooManyRequests())
@@ -33,21 +33,36 @@ class RateLimitIntegrationTest extends IntegrationTest {
     }
 
     @Test
-    void accountLocksAfterRepeatedWrongPasswordsEvenFromManyIps() throws Exception {
+    void wrongPasswordsLockOutTheirIp_notTheAccount() throws Exception {
         TestUser jade = register("Jade");
         for (int i = 0; i < 5; i++) {
-            mvc.perform(json(post("/auth/login"), login(jade.email(), "wrong-password-" + i)).with(from("10.1.0." + i)))
+            mvc.perform(json(post("/auth/login"), login(jade.email(), "wrong-password-" + i)).with(from("10.1.0.9")))
                     .andExpect(status().isUnauthorized());
         }
-        // Even the right password is refused during the lockout.
-        mvc.perform(json(post("/auth/login"), login(jade.email(), jade.password())).with(from("10.2.0.1")))
+        // The guessing IP is refused even with the right password...
+        mvc.perform(json(post("/auth/login"), login(jade.email(), jade.password())).with(from("10.1.0.9")))
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.code").value("TOO_MANY_ATTEMPTS"))
                 .andExpect(header().exists("Retry-After"));
-
-        clock.advance(Duration.ofMinutes(16));
+        // ...but Jade, elsewhere, still signs in: a stranger can't lock her out (roadmap 1.2 follow-up).
         mvc.perform(json(post("/auth/login"), login(jade.email(), jade.password())).with(from("10.2.0.1")))
                 .andExpect(status().isOk());
+
+        clock.advance(Duration.ofMinutes(16));
+        mvc.perform(json(post("/auth/login"), login(jade.email(), jade.password())).with(from("10.1.0.9")))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void guessesSpreadOverManyIpsHitTheAccountBackstop() throws Exception {
+        TestUser max = register("Max");
+        for (int i = 0; i < 50; i++) {
+            mvc.perform(json(post("/auth/login"), login(max.email(), "spray-" + i)).with(from("10.3." + (i / 200) + "." + i)))
+                    .andExpect(status().isUnauthorized());
+        }
+        mvc.perform(json(post("/auth/login"), login(max.email(), max.password())).with(from("10.4.0.1")))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("TOO_MANY_ATTEMPTS"));
     }
 
     @Test

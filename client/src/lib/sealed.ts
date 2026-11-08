@@ -6,7 +6,8 @@
  *     ├─ wrapped by Argon2id(passphrase)              → server, opaque
  *     └─ wrapped by HKDF(BIP-39 recovery phrase)      → server, opaque
  *   vault data key (AES-256, random, one per key version)
- *     └─ wrapped to each member's public key (X25519 ECDH + HKDF-SHA256 + AES-256-GCM)
+ *     └─ wrapped to each member's public key, authenticated by the wrapping member's key
+ *        (X25519 ephemeral + static ECDH + HKDF-SHA256 + AES-256-GCM; format v2, security review F2)
  *   content: AES-256-GCM(vault key, AAD = "<recordId>:<field>")   (the server-side scheme, unchanged)
  *
  * Audited primitives only (@noble/curves, @noble/hashes, @noble/ciphers, @scure/bip39); no custom crypto.
@@ -100,7 +101,14 @@ export function isValidRecoveryPhrase(phrase: string): boolean {
   return normalized.split(' ').length === 24 && validateMnemonic(normalized, wordlist);
 }
 
+/** The range the server accepts (E2eFormats); anything else is refused rather than run (review I1). */
+const ARGON2_LIMITS = { mMin: 19_456, mMax: 262_144, tMin: 2, tMax: 10, pMax: 4 };
+
 async function deriveFromPassphrase(passphrase: string, kdf: Argon2Kdf): Promise<Uint8Array> {
+  const L = ARGON2_LIMITS;
+  if (kdf.m < L.mMin || kdf.m > L.mMax || kdf.t < L.tMin || kdf.t > L.tMax || kdf.p < 1 || kdf.p > L.pMax) {
+    throw new SealedError('Unsupported key format');
+  }
   return argon2idAsync(encoder.encode(passphrase.normalize('NFKC')), fromBase64(kdf.salt), {
     m: kdf.m,
     t: kdf.t,
@@ -259,6 +267,68 @@ export function unwrapVaultKey(
   } catch {
     throw new SealedError('This vault key was not wrapped for you');
   }
+}
+
+// ---- Authenticated vault-key wraps (format v2, security review F2) ---------------------------------
+
+export const VAULT_KEY_FORMAT_V2 = 2;
+
+/** Who wrapped a vault key: the device must know their public key to verify the wrap. */
+export interface WrapSender {
+  userId: string;
+  publicKey: Uint8Array;
+}
+
+function authInfo(vaultId: string, version: number, recipientId: string, senderId: string): Uint8Array {
+  return encoder.encode(`lock:vault-key:v2:${vaultId}:${version}:${recipientId}:${senderId}`);
+}
+
+/**
+ * HPKE Auth-mode style wrap: the AES key comes from X25519(ephemeral, recipient) and from
+ * X25519(sender static, recipient). Only the holder of the sender's secret key could have produced it,
+ * so a server inserting a vault key it chose (wrapped to members' public keys) is detected on unwrap.
+ * Layout as v1: 0x02 || ephemeral public(32) || nonce(12) || ct(32) + tag(16) = 93 bytes.
+ */
+export function wrapVaultKeyAuth(
+  vaultKey: Uint8Array,
+  recipientPublicKey: Uint8Array,
+  vaultId: string,
+  version: number,
+  recipientId: string,
+  sender: { userId: string; pair: KeyPair },
+): Uint8Array {
+  const ephemeral = x25519.utils.randomSecretKey();
+  const ephemeralPublic = x25519.getPublicKey(ephemeral);
+  const ikm = concat(x25519.getSharedSecret(ephemeral, recipientPublicKey), x25519.getSharedSecret(sender.pair.secretKey, recipientPublicKey));
+  const info = authInfo(vaultId, version, recipientId, sender.userId);
+  const key = hkdf(sha256, ikm, concat(ephemeralPublic, recipientPublicKey, sender.pair.publicKey), info, 32);
+  const nonce = randomBytes(NONCE);
+  return concat(Uint8Array.of(VAULT_KEY_FORMAT_V2), ephemeralPublic, nonce, gcm(key, nonce, info).encrypt(vaultKey));
+}
+
+export function unwrapVaultKeyAuth(
+  wrapped: Uint8Array,
+  pair: KeyPair,
+  vaultId: string,
+  version: number,
+  recipientId: string,
+  sender: WrapSender,
+): Uint8Array {
+  if (wrapped.length !== 93 || wrapped[0] !== VAULT_KEY_FORMAT_V2) throw new SealedError('Unsupported vault key format');
+  const ephemeralPublic = wrapped.subarray(1, 33);
+  const ikm = concat(x25519.getSharedSecret(pair.secretKey, ephemeralPublic), x25519.getSharedSecret(pair.secretKey, sender.publicKey));
+  const info = authInfo(vaultId, version, recipientId, sender.userId);
+  const key = hkdf(sha256, ikm, concat(ephemeralPublic, pair.publicKey, sender.publicKey), info, 32);
+  try {
+    return gcm(key, wrapped.subarray(33, 33 + NONCE), info).decrypt(wrapped.subarray(33 + NONCE));
+  } catch {
+    throw new SealedError('This vault key was not wrapped for you by the member it claims');
+  }
+}
+
+/** The format byte of a stored wrapped vault key (1 = legacy anonymous, 2 = authenticated). */
+export function wrapFormat(wrapped: Uint8Array): number {
+  return wrapped[0];
 }
 
 // ---- Piece 3: content fields -------------------------------------------------------------------------

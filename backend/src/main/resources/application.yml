@@ -79,8 +79,10 @@ lock:
     kms-endpoint: ${LOCK_KMS_ENDPOINT:}      # only for LocalStack-style testing
   rate-limit:
     auth-requests-per-minute: 20   # per client IP, per /auth endpoint
-    max-failed-logins: 5           # wrong passwords per account before a temporary lockout
+    max-failed-logins: 5           # wrong passwords per account from one IP before that IP is locked out of it
+    max-failed-logins-per-account: 50  # from all IPs together (botnet backstop)
     lockout: PT15M
+    store: ${LOCK_RATE_LIMIT_STORE:memory}  # memory (one instance) | postgres (shared by every instance)
   scan:
     # clamav: a clamd sidecar (production). dev: recognises only the EICAR test file (refused in prod).
     provider: ${LOCK_SCAN_PROVIDER:dev}

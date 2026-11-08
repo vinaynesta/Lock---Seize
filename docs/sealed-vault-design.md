@@ -4,6 +4,20 @@ Roadmap 3.6 · Status: **in progress.** Recovery model decided 2026-11-01: A + B
 Pieces a-f built (keys, member keys, content, media, device approval, search and export); the external
 crypto audit (3.6g) remains. Media policy decided 2026-11-01 (decisions §25). · Written 2026-10-24
 
+> **Updated 2026-11-08:**
+> - **Format v2** (roadmap 3.8, after the internal review in [`security-review-sealed-vault.md`](security-review-sealed-vault.md)):
+>   - wrapped vault keys are authenticated by the sender's X25519 key;
+>   - devices pin members' keys;
+>   - reflections are bound to their memory and author;
+>   - media is bound to its asset id.
+> - **Later additions:**
+>   - offline encrypted drafts and media (3.9, 3.10);
+>   - a passphrase strength check (3.9);
+>   - encrypted map positions (5.1).
+>
+> The byte-level reference is now [`sealed-vault-protocol.md`](sealed-vault-protocol.md), with test vectors.
+> Where this note's §3 differs, the protocol spec is authoritative.
+
 ## 1. What it is
 
 A premium vault tier where the server **never** has the key. Today every vault is encrypted
@@ -66,8 +80,10 @@ media:   encrypted on device before upload; storage holds ciphertext only
 The sketch below was the proposal. As built: `user_key_bundles` has `wrapped_by_passphrase` +
 `passphrase_kdf` and `wrapped_by_recovery` + `recovery_kdf` (both required), triggers make the public
 key and `vault_member_keys` rows immutable, and `device_approvals` holds a one-time request key and the
-sealed secret for 10 minutes. Media uses `memory_assets.encryption_metadata = 'e2e:v1'`. Diagrams:
-[`architecture.md`](architecture.md) §3 and §7.
+sealed secret for 10 minutes. Media uses `memory_assets.encryption_metadata = 'e2e:v1'`. Later:
+`V19` stores the wrapper's public key on each `vault_member_keys` row (format v2) and `V21` adds the
+encrypted map position `memories.coordinates_ct`. Diagrams: [`architecture.md`](architecture.md) §3
+and §7 (including "Opening a sealed vault: authenticated keys and pins").
 
 Original sketch:
 

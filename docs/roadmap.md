@@ -8,7 +8,7 @@ Before starting a feature, re-read its entry. After finishing one, tick it off a
 - Design reference: [`Lock_High_Level_Detailed_System_Design.md`](Lock_High_Level_Detailed_System_Design.md)
 - Decisions already taken: [`decisions.md`](decisions.md)
 
-_Last reviewed: 2026-11-01_
+_Last reviewed: 2026-11-08_
 
 ---
 
@@ -67,14 +67,24 @@ _Last reviewed: 2026-11-01_
 | 2.5 | Account deletion | P2 | M | Policy C chosen | ✅ |
 | 2.6 | Password reset by email | P2 | M | 1.2 | ✅ |
 | 2.7 | Push notifications (on this day, capsule reveal, invites) | P2 | M | outbox | ✅ |
-
 | 2.8 | Video/audio transcoding for playback | P2 | L | 2.1 | ✅ |
 | 3.1 | MFA (TOTP) | P3 | M | 1.1 | ✅ |
 | 3.2 | Storage quotas per plan | P3 | M | — | ✅ |
-| 3.3 | Cold-tier archival of old media | P3 | M | 3.2 | ✅ |items 
+| 3.3 | Cold-tier archival of old media | P3 | M | 3.2 | ✅ |
 | 3.4 | Search over memories | P3 | L | — | ✅ |
 | 3.5 | Offline drafts and background upload (client) | P3 | L | — | ✅ |
-| 3.6 | Sealed Vault (end-to-end encryption tier) | P3 | XL | 2.4, recovery decision ✅ | ◐ 6 of 7 pieces (3.6a–f); audit (3.6g) left |
+| 3.6 | Sealed Vault (end-to-end encryption tier) | P3 | XL | 2.4, recovery decision ✅ | ◐ 3.6a–f ✅, 3.6g internal review ✅, format v2 (3.8) ✅; external audit left |
+| 3.7 | Sealed follow-ups: re-index older memories, streaming export, in-app playback | P3 | M | 3.6f | ✅ |
+| 4.1 | Minimalist UI redesign (design system + every screen) | P2 | S | — | ✅ |
+| 3.8 | Sealed format v2: authenticated key wraps, key pinning, bound reflections and media (review F1, F2, F5, F6) | P2 | M–L | 3.6g review | ✅ |
+| 4.2 | Upgrade to Expo SDK 58 (F10) | P2 | S | — | ✅ |
+| 1.7 | Lockout abuse fix + rate limits shared across instances (1.2 known limits) | P2 | M | 1.2 | ✅ |
+| 3.9 | Sealed: passphrase strength check (review F9), offline encrypted drafts, protocol spec for the audit | P2 | M | 3.8 | ✅ |
+| 3.10 | Sealed: offline and background upload of photos and videos | P3 | S–M | 3.5, 3.9 | ✅ |
+| 3.11 | Sealed protocol test vectors, checked by an independent implementation (audit prep) | P2 | S | 3.9 spec | ✅ |
+| 5.1 | Memory map: pin memories and see a vault's memories on a map | P3 | M | — | ✅ |
+| 4.3 | Device test checklist + CI check that docs diagrams parse | P2 | S | — | ✅ |
+| 5.2 | Map: pick a pin on the map, group nearby pins, one map across all vaults | P3 | M | 5.1 | ✅ |
 
 **Rough totals.** P0 ≈ 2 days · P1 ≈ 3–4 weeks · P2 ≈ 8–10 weeks · P3 is open-ended.
 
@@ -144,9 +154,9 @@ _Last reviewed: 2026-11-01_
 > - `LoginAttemptGuard` locks an account for 15 minutes after 5 wrong passwords, from any IP. It counts unknown emails too, so the lockout doesn't reveal which accounts exist. Change-password and deletion re-auth share their own per-user counter.
 > - Over the limit returns 429 with `Retry-After`. Limits are configurable under `lock.rate-limit`.
 >
-> Known limits:
-> - Counts are per instance. Move them to Redis before running several instances.
-> - Anyone can lock out a known email for 15 minutes (the standard trade-off). Revisit with CAPTCHA or MFA.
+> Known limits (both closed 2026-11-08 by 1.7):
+> - ~~Counts are per instance. Move them to Redis before running several instances.~~ Shared through Postgres.
+> - ~~Anyone can lock out a known email for 15 minutes.~~ The lockout is now per account and IP, with an account-wide backstop (decisions §26).
 > - Behind a load balancer, set `LOCK_FORWARD_HEADERS=framework`, or every client will share the balancer's IP.
 
 ### 1.3 Scheduler locking (ShedLock) · S
@@ -362,7 +372,7 @@ _Last reviewed: 2026-11-01_
   | 3.6d | Client-side media encryption + on-device thumbnails | L | ✅ 2026-11-01 (media policy: decisions §25) |
   | 3.6e | Device approval flow (QR) | M | ✅ 2026-11-01 |
   | 3.6f | On-device search index and export | M | ✅ 2026-11-01 |
-  | 3.6g | Security review + external audit of the crypto | M + vendor | ☐ before any paid launch |
+  | 3.6g | Security review + external audit of the crypto | M + vendor | ◐ internal review ✅ and its High/Medium findings fixed 2026-11-08 ([`security-review-sealed-vault.md`](security-review-sealed-vault.md)); external audit ☐ before any paid launch |
 
   As built (3.6a–c):
   - **Crypto (client `lib/sealed.ts`):** audited libraries only (`@noble/curves`, `@noble/hashes`,
@@ -410,31 +420,290 @@ _Last reviewed: 2026-11-01_
   - **Known limits:** sealed memories written before 3.6f have no tokens until their creator re-saves
     them (`PUT /memories/{id}/search-tokens` exists; no automatic re-index yet). Sealed exports build in
     memory per file, so a single file larger than the device's free memory would fail. Personal vaults stay server-side (sealed vaults are created as shared ones, even
-    with no other members). Offline drafts don't cover sealed vaults (nothing plaintext is queued). The
+    with no other members). ~~Offline drafts don't cover sealed vaults~~ (closed by 3.9: the encrypted body is queued). The
     server can't check that a member wrapped the right key for a newcomer; at worst that locks the
     newcomer out (design §3).
 
+  As built (3.6g, internal review, 2026-11-08): full report in
+  [`security-review-sealed-vault.md`](security-review-sealed-vault.md). 2 High, 2 Medium, 5 Low, 6 Info.
+  - **Fixed:**
+    - F3: the passphrase can't equal the account password (`requireDistinctPassphrase`).
+    - F4: `sweepSealedCache()` at launch and sign-out; exports stream with no plaintext copy and delete
+      their ZIP on failure; the player deletes decrypted media on close.
+    - F7: a header-only (truncated) file is refused.
+    - F8: the clipboard clears 60 s after copying the recovery phrase.
+    - I1: out-of-range Argon2 parameters are refused. I2: `encryptFile` reads ahead instead of trusting
+      the file size. I5: session tokens are stored `WHEN_UNLOCKED_THIS_DEVICE_ONLY`.
+    - F1, in part: fingerprints are computed on the device, for yourself and per member.
+  - **Open (format v2, for the external audit):**
+    - F1: pin verified member keys and refuse unverified ones.
+    - F2: authenticated key wraps (the server can currently plant a vault key it knows).
+    - F5: reflection AAD should bind the memory and author. F6: media keys should bind the asset id.
+    - I4: separate content, media and search subkeys.
+    - F9: passphrase strength or a native Argon2 at 64 MiB.
+  - **Tests:** `sealedGuards.test.ts` (2), an Argon2-range case in `sealed.test.ts`.
+
+### 3.7 Sealed follow-ups · M · ✅ 2026-11-08
+The three loose ends 3.6f left, all built:
+- **Re-index older sealed memories.** `GET /vaults/{id}/search/unindexed` lists the caller's own
+  memories with no device tokens; the device computes tokens under each memory's key version and sends
+  them with `PUT /memories/{id}/search-tokens`. An empty token list marks the memory "no words" so it isn't
+  offered again. It runs in the background once per session when a sealed vault opens
+  (`reindexSealedVault`). `V18__sealed_reindex.sql` clears the old server-backfill skip rows for sealed
+  memories, and the server backfill now leaves sealed vaults out by query. Closed capsules wait until they
+  open.
+- **Streaming sealed export.** Each original is downloaded encrypted, then decrypted and pushed into the
+  ZIP one 1 MiB chunk at a time (`streamSealedAsset`). Memory use is bounded whatever the file size, and no
+  plaintext copy is written to disk.
+- **In-app playback.** `expo-video` plays sealed video and audio from the decrypted cache file inside
+  the app (`MediaPlayer`), and the decrypted copy is deleted when the player closes. Server-side video
+  and audio play their PLAYBACK rendition in the same player on native; on web they still open in a tab.
+  It needs a new development build (native module). Sealed photos still open through the share sheet.
+- **Tests:** `devicesReindexTheirOwnOlderMemories_untilEachHasTokensOrIsMarkedEmpty` and the updated
+  backfill check in `SealedVaultIntegrationTest`. Streaming and playback use native file and video APIs,
+  so they have no automated test. Check them on a device.
+
+### 4.1 Minimalist UI redesign · S · ✅ 2026-11-08
+- **Design system** (`client/src/theme`, `components/ui.tsx`):
+  - Palette: warm paper neutrals with ink-coloured primary actions; one amber accent for links, focus
+    and highlights; a matching dark theme.
+  - Controls: pill buttons (primary, secondary, ghost, danger), filled inputs with a focus ring, cards
+    with hairline borders.
+  - Components: `Section`, `Group` and `Row` (settings-style lists), `Chip`, `Monogram`, `ProgressBar`,
+    `LockMark`, `TextLink`.
+- **Screens:**
+  - Rebuilt: sign-in, home (greeting and vault list), vault timeline (filter chips), settings (grouped
+    rows and storage card), memory detail (sections, reflections as a quiet thread).
+  - Every other screen picks the design up through the shared components. Tertiary actions use the ghost
+    style, and emoji status markers became plain text.
+- **Not done:** custom fonts (system font only) and screenshots on a device.
+
 ---
 
-## Remaining work estimate (2026-11-01, updated after 3.6a–f)
+### 3.8 Sealed format v2 · M–L · ✅ 2026-11-08
+Fixes the review's two High findings and two of its Low findings, so the external audit sees one
+protocol revision. Details and the remaining trust-on-first-use limit are in
+[`security-review-sealed-vault.md`](security-review-sealed-vault.md).
+- **Authenticated key wraps (review F2).**
+  - Format byte `0x02`, same 93 bytes. The AES key comes from the ephemeral and the sender's static
+    X25519 keys, with the sender's id and key in HKDF.
+  - The server refuses new version-1 uploads (`LEGACY_KEY_FORMAT`). `V19` stores the wrapper's public key
+    on each row, so copies stay verifiable after an account deletion.
+  - Version-1 copies already stored open only up to the key version a device first saw for the vault.
+- **Key pinning (review F1).**
+  - `lib/keyPins.ts` pins each member's key on first sight, per account, in AsyncStorage.
+  - A changed key blocks wrapping to it, accepting wraps verified with it, and creating a new version,
+    until the user accepts it in Members (with a confirmation). Members can be marked "Verified in person".
+  - The device refuses to share keys if the server lists a different key for the user's own account.
+- **Reflections (review F5):** AAD `memoryId:reflectionId` + `reflection:v2:<authorId>`. Older ones still
+  open.
+- **Media (review F6):**
+  - Header version 2; the file key's HKDF info includes the asset id, which the device now picks
+    (optional `id` on `POST /memories/{id}/assets/upload`, sealed vaults only).
+  - Thumbnails are bound the same way. Older files still open.
+- **Tests:**
+  - Client: `keyPins.test.ts` (4), `sealedBindings.test.ts` (2), an authenticated-wrap case in
+    `sealed.test.ts`.
+  - Server: `newWrapsMustBeAuthenticated_andCarryTheWrappersPublicKey`,
+    `sealedUploadsMayChooseTheirAssetId_serverVaultsMayNot`.
+- **Not done:** I4 (separate content, media and search subkeys). It would change every content format,
+  so it waits for the auditor's view.
 
-All of P0–P2 and 3.1–3.5 are built. What is left:
+### 4.2 Upgrade to Expo SDK 58 · S · ✅ 2026-11-08
+Closes follow-up F10.
+- **Versions:** Expo 58.0.23, React Native 0.88, React 19.3, `expo-router` 58, Jest 30 with `jest-expo` 58.
+  Every package matches `expo install --check`, and `expo-doctor` passes 20/20.
+- **Lockfile:** regenerated. `npm ci` works again, and `decode-uri-component` (GHSA-qr28-fpjm-wq7f) is gone.
+  `npm audit --omit=dev` lists only 5 moderate advisories, all in Expo CLI's build-time `glob`/`minimatch`.
+- **Code changes:**
+  - `FileHandle.readBytes`/`writeBytes` are async in SDK 58. Sealed file encryption, decryption and
+    streaming now await them (which also keeps the UI responsive on big files); the ZIP writer uses
+    `writeBytesSync`.
+  - `web.output` is set to `"static"`, because SDK 58 defaults to `"server"`.
+  - Removed a duplicate `eslint-config-expo` entry from `dependencies`.
+  - One lint false positive (`AndroidImportance`, which is exported at runtime) is suppressed with a reason.
+- **Checks:** type check, lint, 28 client tests, and a full web export (every route pre-renders).
+- **Needs a new development build:** React Native 0.88, iOS scene life cycle (generated by prebuild).
+- **CI:** Node `lts/*` meets the new minimum (22.13+).
+
+---
+
+### 1.7 Login lockout abuse + shared rate limits · M · ✅ 2026-11-08
+Closes both known limits of 1.2.
+- **Lockout per account and IP** (decisions §26). 5 wrong passwords lock out only the guessing IP for that
+  account (15 min); 50 from all IPs together still stop a botnet. A stranger can no longer lock a known
+  email out. A password reset clears every IP's count for the account. Re-authentication and MFA codes
+  stay per account (they need a session).
+- **Shared counters.** `RateLimiter` is now an interface with two stores:
+  - `InMemoryRateLimiter`: development and tests.
+  - `PostgresRateLimiter`: `V20__shared_rate_limits.sql`, one row per hit. A per-key advisory lock means
+    concurrent instances can't both let the last attempt through. Writes run in their own transaction, so
+    a failed login is counted even though the login rolls back. Rows are swept every 10 min.
+
+  Chosen with `LOCK_RATE_LIMIT_STORE`. The `prod` profile refuses `memory`, and
+  `production.env.example` sets `postgres`.
+- **Tests:**
+  - `RateLimitIntegrationTest`: the guessing IP is locked while the owner signs in elsewhere; a spray from
+    50 IPs hits the backstop.
+  - `SharedRateLimitIntegrationTest` (Postgres store): sliding window; 20 concurrent attempts let exactly
+    5 through; prefix reset with LIKE escaping; sweep; a failed login is counted across the rollback.
+  - `ProductionSecretsGuardTest`: refuses `memory`.
+
+### 3.9 Sealed: passphrase strength, offline drafts, audit spec · M · ✅ 2026-11-08
+- **Passphrase strength (review F9).** `passphraseStrength.ts` (no dictionary dependency):
+  - Pool entropy, discounted for human choice, minus penalties for repeats, sequences, keyboard rows,
+    common passwords, years, and the account's name or email.
+  - Passphrases under 50 bits are refused in setup, recovery and change, both in the UI (live meter with
+    a hint) and in `sealedVault.ts`.
+  - A higher Argon2 cost stays a product call.
+- **Offline sealed drafts** (3.6 known limit). Compose encrypts first. When offline, only the encrypted
+  request body is queued (`createSealedDraft`), with the same memory id and Idempotency-Key. If a member
+  left while the user was offline, the draft is re-encrypted under the newest key the device holds;
+  otherwise it waits until the vault is opened. (Sealed media followed in 3.10.)
+- **Protocol spec for the external audit.** [`sealed-vault-protocol.md`](sealed-vault-protocol.md):
+  - every byte format, KDF label and AAD;
+  - the device rules (pins, legacy ceiling, offline re-encryption);
+  - the server checks, the known limits, and a map of the tests.
+- **Tests:** `passphraseStrength.test.ts` (11), `sealedGuards.test.ts` (+1), `sealedOfflineDraft.test.ts` (2).
+
+---
+
+### 3.10 Sealed: offline and background media upload · S–M · ✅ 2026-11-08
+Closes the last offline gap for sealed vaults; picked by the product owner over the other optional items.
+- **Device.** Adding photos or videos to a sealed draft encrypts each file, and a photo's 256 px thumbnail,
+  right away, while the vault key is in hand. Ciphertext goes into the persistent queue folder
+  (`prepareSealedUpload`), and the queue (`uploadSealed` items) sends it now or when the network returns,
+  surviving app restarts. No plaintext is stored: the plaintext thumbnail is deleted as soon as it is
+  encrypted, and the picker file isn't copied. Web still uploads directly.
+- **Safe retries.** The encryption is bound to the asset id, so a retry must reuse it.
+  - `POST /memories/{id}/assets/upload` with the same client-chosen `id` now returns a fresh URL when the
+    same memory, size, checksum and type retry an unfinished (`INITIATED`) upload.
+  - A different file still gets `409 ASSET_EXISTS`. If that answer comes back because an earlier try
+    already uploaded, the device just completes the asset (idempotent).
+- **Failures.** Failed items show in the pending list as before. "Remove from this device" deletes their
+  ciphertext.
+- **Tests:**
+  - Client: `sealedUploadQueue.test.ts` (2), `sealedUploadRetry.test.ts` (2).
+  - Server: `sealedUploadsMayChooseTheirAssetId_serverVaultsMayNot`, extended with the retry and the
+    different-file conflict.
+
+---
+
+### 3.11 Sealed protocol test vectors · S · ✅ 2026-11-08
+Audit preparation, chosen by the product owner.
+- **Vectors.** [`sealed-vault-test-vectors.json`](sealed-vault-test-vectors.json) has fixed inputs and
+  outputs for every Sealed Vault format: keys and fingerprints, passphrase and recovery wraps, vault-key
+  wraps v2 and v1, a content field, a v2 reflection, one- and two-chunk media, search tokens, and the
+  device-approval box. They are generated with a seeded random source.
+- **Two checks** (`protocolVectors.test.ts`):
+  - The app's own crypto reproduces the file byte for byte.
+  - An independent implementation on Node's `crypto` only, written from
+    [`sealed-vault-protocol.md`](sealed-vault-protocol.md), opens or recomputes every vector, including
+    Argon2id through `crypto.argon2Sync`.
+
+  A one-byte change to the file fails the tests (checked). The spec gains §11 on how auditors use the
+  vectors.
+- **Two catches while building it:**
+  - Since the SDK 58 upgrade (Jest 30), the test environment provides real Web Crypto. Existing tests that
+    mock `expo-crypto` now draw real randomness, which is harmless for them. The vectors therefore seed
+    `globalThis.crypto` directly.
+  - The test loads Node built-ins with `require`, because the app's tsconfig deliberately has no Node
+    globals.
+
+---
+
+### 5.1 Memory map · M · ✅ 2026-11-08
+Requested by the product owner, who chose these options: positions pinned on the device, `expo-maps`, a
+per-vault map with a list on web. Decision record: decisions §27.
+- **Data.**
+  - Optional `coordinates` per memory: `{latitude, longitude}` in the API, stored encrypted as
+    `"lat,lng"` (6 decimals) with AAD `<memoryId>:coordinates`. In sealed vaults it is encrypted on the
+    device; plaintext coordinates there get `PLAINTEXT_IN_SEALED_VAULT`.
+  - `V21` adds `memories.coordinates_ct` and extends the immutability trigger, so a pin freezes when the
+    memory locks.
+  - The integrity hash covers coordinates only when present, as a labelled field at the end, so every
+    existing proof stays valid.
+- **Pinning (memory form).** "Use my location" (GPS, permission only while the app is in use), "Find
+  ‘Where’ on the map" (the phone's geocoder, on request), and "Remove pin". Drafts only, like all content.
+- **Map screen** (`vault/[id]/map`, "Map" in the vault header):
+  - It loads the vault's memories and shows pinned ones on Apple Maps (iOS 17+) or Google Maps (Android).
+    Tapping a marker opens the memory on Android and iOS 18+.
+  - A list grouped by place sits under the map, for every platform; on web it is the whole view.
+  - An opt-in "Place by ‘Where’" switch looks up unpinned memories' place names on the device for this
+    session only (never stored), to cover memories locked before pins existed.
+  - Closed time capsules never appear. Pinned memories show "See on the map".
+- **Config.**
+  - `expo-location` (when-in-use only, no background) and `expo-maps` plugins.
+  - `client/app.config.ts` reads `GOOGLE_MAPS_ANDROID_API_KEY` from the environment, so no key is in the
+    repo; iOS needs none.
+  - Needs a new development build.
+- **Tests:**
+  - Server: `MemoryCoordinatesIntegrationTest` (round trip, encrypted at rest, validation, frozen after
+    lock, integrity), and a sealed-vault case in `SealedVaultIntegrationTest`.
+  - Client: `geo.test.ts` (3), a sealed coordinates binding case in `sealedBindings.test.ts`.
+  - Web export confirmed free of the native maps module.
+- **Not done (all three closed by 5.2):**
+  - ~~Dropping a pin on the map~~.
+  - ~~Clustering of many nearby pins~~.
+  - ~~A map across all vaults~~.
+
+---
+
+### 4.3 Device test checklist + docs CI · S · ✅ 2026-11-08
+- **Device test checklist.** [`device-test-checklist.md`](device-test-checklist.md) is a step-by-step
+  manual check for an iPhone on iOS 18, one on iOS 17, and an Android phone. It covers what automated
+  tests can't:
+  - the build and the Maps key, and the SDK 58 shell;
+  - the sign-in lockout;
+  - Sealed keys: strength meter, clipboard, fingerprints, a simulated key change, member removal;
+  - device approval;
+  - offline sealed drafts and media, including checking that only `.lkm` files sit on disk;
+  - playback and a large export, re-indexing;
+  - every map feature, including iOS 17 and Android without a key.
+  It's the script for the open "Device check" item.
+- **Docs CI.** `tools/docs-check` (Mermaid 11.4.1 and jsdom, pinned, with its own lockfile) parses every
+  Mermaid block in `docs/` with Mermaid itself. A new `docs` job in `.github/workflows/ci.yml` runs it,
+  so a diagram that GitHub would show as an error box fails the build. Checked against a deliberately
+  broken diagram (fails) and the current docs (13/13 pass).
+
+### 5.2 Map: pin picker, clustering, all-vaults map · M · ✅ 2026-11-08
+Closes the three "not done" items of 5.1.
+- **Pick on the map** (`PinPicker`). A full-screen map with a fixed crosshair: pan the map under it, then
+  "Pin here". It only needs camera-move events, so it works on iOS 17 too. On Android and iOS 18, tapping
+  the map moves there. It isn't offered on web (no native map).
+- **Clustering** (`clusterPoints` in `geo.ts`). Pins that would overlap are grouped on a zoom-dependent
+  grid into one marker titled "N memories", reclustered when the integer zoom changes. Tapping a group
+  zooms in two levels on it, and single pins keep their ids so markers don't flicker.
+- **All-vaults map.** Home → "📍 Map of all memories" (`app/map.tsx`, loader `lib/mapData.ts`) shows
+  every vault's memories on one map, with each list row labelled by its vault.
+  - Sealed vaults are included only when this device's keys open them without asking. Otherwise they're
+    listed under "Not included", with a link to unlock.
+  - Nothing is decrypted on the server.
+- **Refactor.** The map screen's body is now `MemoriesMapView`, shared by the vault and all-vaults maps.
+- **Tests:** `geo.test.ts` (+1 clustering case), `mapData.test.ts` (2). The web export includes both map
+  screens without the native maps module.
+
+---
+
+## Remaining work estimate (2026-11-08, after 4.3 and 5.2)
+
+All decision-free work is done. What's left needs a device, a vendor, an operator, an admin, counsel or
+a product decision:
 
 | Item | Type | Effort | Who | Blocked on |
 |---|---|---|---|---|
-| F1 Branch protection on `main` | Manual | XS (10 min) | Repo admin | — |
-| F3/F4/F6 production rollout: load alert rules, set env from `production.env.example`, run `apply-s3-lifecycle.sh` | Ops | XS–S (½–1 day) | Ops | A production environment |
-| F8 Legal sign-off on Policy C | Decision | — (+ M, 3–5 days, only if counsel wants Policy A) | Counsel | Legal review |
-| ~~3.6a–c Sealed Vault keys, member keys, content~~ | Feature | ✅ done 2026-11-01 | | |
-| ~~3.6d sealed media, 3.6e device approval, 3.6f on-device search and export~~ | Feature | ✅ done 2026-11-01 | | |
-| Sealed follow-ups: auto re-index of pre-3.6f sealed memories, streaming export for very large files, video playback renditions on device | Feature | S–M: 3–6 days total | Engineering | — (optional before launch) |
-| 3.6g Security review + external crypto audit | Review | M + vendor time | Security | — (now unblocked) |
+| ~~4.3 device checklist + docs CI, 5.2 map additions~~ | | ✅ done 2026-11-08 | | |
+| Device check: run [`device-test-checklist.md`](device-test-checklist.md) on iOS 18, iOS 17 and Android | Verification | S: 1–1½ days | Engineering | Xcode or Android Studio; a Google Maps key |
+| 3.6g external crypto audit (spec + test vectors ready) | Review | vendor time (+ 2–3 days to fix findings) | Security + vendor | Booking a vendor |
+| Security review I4: separate content/media/search subkeys | Feature | M: 3–4 days | Engineering | The auditor's opinion (deferred) |
+| Native Argon2 at 64 MiB | Feature | S: 1–2 days | Engineering | Product (deferred) |
+| F1 Branch protection on `main` (now also require the `docs` job) | Manual | XS (10 min) | Repo admin | — (deferred) |
+| Production rollout | Ops | XS–S (½–1 day) | Ops | A production environment |
+| F8 Legal sign-off on Policy C | Decision | — (+ M if Policy A) | Counsel | Legal review |
 | 3.6 pricing decision | Decision | — | Product | — |
 
-**Engineering total (updated 2026-11-01, after 3.6a–f):** about 1 day of ops, up to a week of optional
-sealed follow-ups, and the external crypto audit (3.6g: about a week of internal review plus the
-vendor's schedule), plus 3–5 days if F8 lands on Policy A. Every roadmap feature is otherwise built.
-Remaining non-engineering items: F1 (repo admin), F8 (counsel), Sealed Vault pricing (product).
+**Engineering total:** 1–1½ days of device checks and 2–3 days of fixes after the audit. Optional if
+chosen: I4 (3–4 days) and native Argon2 (1–2 days).
 
 ---
 
@@ -453,6 +722,7 @@ Loose ends left by features marked ✅ above. Tick them off here; they are not t
 | F7 | Thumbnails for HEIC/HEIF and WebP originals | 2.1 | Feature · S–M | Launch | ✅ decoded by the 2.8 transcoder (ffmpeg) |
 | F8 | Legal sign-off that Policy C satisfies erasure requests. If counsel wants Policy A, also purge the user's locked memories in shared vaults (decisions §14) | 2.5 | Decision (legal) | Launch | ☐ needs counsel |
 | F9 | Store `user_agent` per refresh token, and add a client test runner for the token-refresh logic | 1.1 | Feature · S | Launch | ✅ V15 + `GET /auth/sessions`; Jest (`jest-expo`) with `src/api/__tests__/client.test.ts`, run in CI |
+| F10 | Upgrade to Expo SDK 58. Dependabot #11 moved `expo-router` to 58 on SDK 57, which broke `npm ci` (peer conflict with `expo-constants` 57). Fixed 2026-11-08 by pinning `expo-router ~57.0.30`, as `expo install --check` expects, but that brings back `decode-uri-component` 0.2.2 (GHSA-qr28-fpjm-wq7f, a client-side DoS in URL decoding). The SDK upgrade removes both | 4.1 / deps | Maintenance · S | Launch | ✅ 2026-11-08 (roadmap 4.2): Expo 58.0.23, lockfile regenerated, advisory gone |
 
 Notifications for rejected files, ready exports and account-deletion reminders are part of 2.7, not listed here.
 
@@ -489,3 +759,10 @@ Notifications for rejected files, ready exports and account-deletion reminders a
 | 2026-11-01 | Sealed Vault recovery model decided (decisions §24). 3.6 split into 3.6a–g; done: 3.6a (key bundle), 3.6b (member keys), 3.6c (device-encrypted content). Next: 3.6e device approval, 3.6f on-device search/export; 3.6d waits on the sealed-media malware decision. |
 | 2026-11-01 | Sealed media policy decided (decisions §25). Done: 3.6d (device-encrypted media and thumbnails), 3.6e (QR device approval), 3.6f (on-device search tokens and export). Sealed Vault is feature-complete; 3.6g (external crypto audit) is next. |
 | 2026-11-01 | Docs: added `docs/architecture.md` (as-built system, module, data, lifecycle, upload, event, encryption, device-approval and deployment diagrams, all Mermaid, render-checked); as-built notes in the design doc; decisions, sealed-vault design, README, deploy README and client AGENTS.md brought up to date. |
+| 2026-11-08 | Done: 3.6g internal security review ([`security-review-sealed-vault.md`](security-review-sealed-vault.md)); fixed review findings F3, F4, F7, F8, I1, I2, I5 and part of F1. 3.7 sealed follow-ups (re-index older memories via `GET /vaults/{id}/search/unindexed` + V18, streaming export, in-app playback with `expo-video`). 4.1 minimalist UI redesign. Fixed `npm ci` by pinning `expo-router` to SDK 57 (F10 tracks the SDK 58 upgrade). Next: Sealed format v2 (review F1 pinning, F2 authenticated wraps), then the external audit. |
+| 2026-11-08 | Done: 3.8 Sealed format v2 (authenticated key wraps + V19, key pinning with verify/accept in Members, bound reflections and media, client-chosen sealed asset ids); fixes security review F1, F2, F5, F6. 4.2 Expo SDK 58 upgrade (closes F10; async file handles, static web output). Next: device checks, then the external crypto audit. |
+| 2026-11-08 | Done: 1.7 (lockout per account+IP with an account backstop, decisions §26; rate limits shared through Postgres, V20, `LOCK_RATE_LIMIT_STORE` required in prod). 3.9 (passphrase strength check for review F9, offline encrypted sealed drafts, `sealed-vault-protocol.md` for the audit). Next: device checks, then book the external audit. |
+| 2026-11-08 | Done: 3.10 (sealed photos and videos encrypted before queueing, background upload with idempotent retries of client-chosen asset ids). The product owner deferred I4 (until the auditor's opinion), native Argon2 and branch protection. All code-fixable roadmap work is complete; next: device checks, then the external audit. |
+| 2026-11-08 | Done: 3.11 (Sealed protocol test vectors in `docs/sealed-vault-test-vectors.json`, verified by the app and by an independent Node-crypto implementation; spec §11). The product owner again deferred I4, native Argon2, branch protection and the device checklist. |
+| 2026-11-08 | Done: 5.1 memory map (encrypted per-memory coordinates + V21, GPS and on-device place lookup in the form, per-vault map on expo-maps with a place-grouped list, list-only on web; decisions §27). |
+| 2026-11-08 | Done: 4.3 (device test checklist; CI `docs` job that parses every Mermaid diagram) and 5.2 (pin picker with a crosshair that works on iOS 17, pin clustering, all-vaults map that skips sealed vaults this device can't open). All decision-free work is complete. |

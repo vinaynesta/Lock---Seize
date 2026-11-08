@@ -40,6 +40,10 @@ public class Memory {
     @Column(name = "location_ct")
     private byte[] locationCt;
 
+    /** Encrypted "lat,lng" (roadmap 5.1); null when the memory has no map position. */
+    @Column(name = "coordinates_ct")
+    private byte[] coordinatesCt;
+
     @Column(nullable = false)
     private Instant occurredAt;
 
@@ -84,13 +88,14 @@ public class Memory {
     }
 
     void writeContent(int keyVersion, byte[] titleCt, byte[] thoughtCt, byte[] feelingCt, byte[] locationCt,
-                      Instant occurredAt, Instant revealAt, Instant now) {
+                      byte[] coordinatesCt, Instant occurredAt, Instant revealAt, Instant now) {
         requireState(MemoryState.DRAFT, "Only drafts can be edited");
         this.keyVersion = keyVersion;
         this.titleCt = titleCt;
         this.thoughtCt = thoughtCt;
         this.feelingCt = feelingCt;
         this.locationCt = locationCt;
+        this.coordinatesCt = coordinatesCt;
         this.occurredAt = occurredAt;
         this.revealAt = revealAt;
         this.updatedAt = now;
@@ -152,6 +157,7 @@ public class Memory {
     public byte[] getThoughtCt() { return thoughtCt; }
     public byte[] getFeelingCt() { return feelingCt; }
     public byte[] getLocationCt() { return locationCt; }
+    public byte[] getCoordinatesCt() { return coordinatesCt; }
     public Instant getOccurredAt() { return occurredAt; }
     public Instant getRevealAt() { return revealAt; }
     public MemoryState getState() { return state; }

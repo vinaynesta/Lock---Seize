@@ -102,13 +102,13 @@ export const api = {
       ...r,
       memory: decryptMemory(r.memory),
       samePeriod: r.samePeriod.map(decryptMemory),
-      reflections: r.reflections.map((x) => decryptReflection(vaultId, x)),
+      reflections: r.reflections.map((x) => decryptReflection(vaultId, r.memory.id, x)),
     };
   },
   onThisDay: async () => (await request<Memory[]>('GET', '/memories/on-this-day')).map(decryptMemory),
   reflections: (memoryId: string, vaultId?: string) =>
     request<Reflection[]>('GET', `/memories/${memoryId}/reflections`).then((rs) =>
-      vaultId ? rs.map((r) => decryptReflection(vaultId, r)) : rs,
+      vaultId ? rs.map((r) => decryptReflection(vaultId, memoryId, r)) : rs,
     ),
   addReflection: (memoryId: string, body: string) =>
     request<Reflection>('POST', `/memories/${memoryId}/reflections`, { body }),
@@ -118,8 +118,9 @@ export const api = {
   cancelDeletion: (memoryId: string) => request<DeletionRequest>('DELETE', `/memories/${memoryId}/deletion-request`),
 
   // Assets
-  initiateUpload: (memoryId: string, type: AssetType, mimeType: string, sizeBytes: number, checksumSha256: string) =>
-    request<UploadTicket>('POST', `/memories/${memoryId}/assets/upload`, { type, mimeType, sizeBytes, checksumSha256 }),
+  /** `id`: sealed vaults only; the device binds its encryption to an asset id it chose (review F6). */
+  initiateUpload: (memoryId: string, type: AssetType, mimeType: string, sizeBytes: number, checksumSha256: string, id?: string) =>
+    request<UploadTicket>('POST', `/memories/${memoryId}/assets/upload`, { id, type, mimeType, sizeBytes, checksumSha256 }),
   completeUpload: (assetId: string) => request<Asset>('POST', `/assets/${assetId}/complete`),
   /** With a variant, returns that derivative when it exists and the original otherwise. */
   downloadUrl: (assetId: string, variant?: AssetVariant) =>
@@ -177,6 +178,9 @@ export const api = {
     request<void>('POST', `/assets/${assetId}/sealed-thumbnail/complete`, { width, height }),
   searchSealed: async (vaultId: string, words: string[][]) =>
     (await request<Memory[]>('POST', `/vaults/${vaultId}/search`, { words })).map(decryptMemory),
+  /** Ids of the caller's own sealed memories that have no device-computed search tokens yet. */
+  unindexedSealed: (vaultId: string, limit = 100) =>
+    request<string[]>('GET', `/vaults/${vaultId}/search/unindexed?limit=${limit}`),
   replaceSearchTokens: (memoryId: string, tokens: string[]) =>
     request<void>('PUT', `/memories/${memoryId}/search-tokens`, { tokens }),
 

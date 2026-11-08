@@ -5,7 +5,7 @@ import { ApiError } from '@/api/client';
 import { api } from '@/api/lock';
 import type { Vault } from '@/api/types';
 
-import { deviceUnlocked, onKeysChanged, openVault, restoreDeviceKeys } from './sealedVault';
+import { deviceUnlocked, onKeysChanged, openVault, reindexSealedVault, restoreDeviceKeys } from './sealedVault';
 
 /** The account's Sealed Vault key bundle: undefined while loading, null if none was set up yet. */
 export function useKeyBundle() {
@@ -57,6 +57,7 @@ export function useSealedVault(vault: Vault | undefined): SealedState {
       const keyVersion = await openVault(vault!, me.data!.id);
       // Content fetched before the key arrived was left encrypted: refetch so it decrypts.
       void queryClient.invalidateQueries({ queryKey: ['timeline', vault!.id] });
+      void reindexSealedVault(vault!.id); // background: older memories become searchable
       return { locked: false as const, keyVersion };
     },
     retry: false,

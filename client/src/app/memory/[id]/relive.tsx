@@ -43,7 +43,7 @@ export default function Relive() {
       />
 
       <View style={{ gap: space.sm }}>
-        <Title>{m.title ?? '🔒 Encrypted memory'}</Title>
+        <Title>{m.title ?? 'Encrypted memory'}</Title>
         <Body muted>
           {formatDate(m.occurredAt)}
           {m.location ? ` · ${m.location}` : ''}
@@ -66,7 +66,7 @@ export default function Relive() {
               <Body muted style={{ fontSize: 13 }}>
                 {formatDate(r.createdAt)}
               </Body>
-              <Body>{r.body ?? '🔒 Encrypted'}</Body>
+              <Body>{r.body ?? 'Encrypted'}</Body>
             </Card>
           ))}
         </View>

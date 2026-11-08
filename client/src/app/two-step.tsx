@@ -7,7 +7,7 @@ import { api } from '@/api/lock';
 import type { MfaSetup } from '@/api/types';
 import { Body, Button, Card, ErrorText, Field, Label, Loading, Screen } from '@/components/ui';
 import { formatDate } from '@/lib/format';
-import { space, useTheme } from '@/theme';
+import { mono, space, useTheme } from '@/theme';
 
 /** Two-step verification (TOTP): set up, view recovery codes once, or turn off. */
 export default function TwoStep() {
@@ -44,7 +44,7 @@ export default function TwoStep() {
         </Body>
         <Card>
           {recovery.map((c) => (
-            <Text key={c} selectable style={{ color: t.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontSize: 16 }}>
+            <Text key={c} selectable style={{ color: t.text, fontFamily: mono, fontSize: 16 }}>
               {c}
             </Text>
           ))}
@@ -95,7 +95,7 @@ export default function TwoStep() {
           <Button title="Open authenticator app" variant="secondary" onPress={() => Linking.openURL(setup.otpauthUri)} />
         ) : null}
         <Card>
-          <Text selectable style={{ color: t.text, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', letterSpacing: 1 }}>
+          <Text selectable style={{ color: t.text, fontFamily: mono, letterSpacing: 1 }}>
             {setup.secret.match(/.{1,4}/g)?.join(' ')}
           </Text>
         </Card>

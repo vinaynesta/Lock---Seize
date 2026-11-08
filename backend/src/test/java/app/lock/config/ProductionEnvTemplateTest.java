@@ -42,6 +42,7 @@ class ProductionEnvTemplateTest {
         Map<String, String> env = parse(Files.readString(TEMPLATE));
         assertThat(env).containsEntry("SPRING_PROFILES_ACTIVE", "prod")
                 .containsEntry("LOCK_SCAN_PROVIDER", "clamav")
+                .containsEntry("LOCK_RATE_LIMIT_STORE", "postgres")
                 .containsEntry("LOCK_EMAIL_PROVIDER", "postmark")
                 .containsEntry("LOCK_STORAGE_TYPE", "s3")
                 .containsEntry("LOCK_TRANSCODE_PROVIDER", "ffmpeg");

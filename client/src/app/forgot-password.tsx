@@ -16,7 +16,7 @@ export default function ForgotPassword() {
           If an account exists for {email.trim()}, we have emailed it a link to choose a new password. The link
           works once and expires in 30 minutes.
         </Body>
-        <Button title="Back to sign in" variant="secondary" onPress={() => router.back()} />
+        <Button title="Back to sign in" variant="ghost" onPress={() => router.back()} />
       </Screen>
     );
   }

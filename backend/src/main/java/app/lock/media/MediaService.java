@@ -71,17 +71,44 @@ public class MediaService {
 
     public record UploadTicket(UUID assetId, URI uploadUrl, String method, Map<String, String> headers, Instant expiresAt) {}
 
-    @Transactional
     public UploadTicket initiateUpload(UUID memoryId, UUID userId, MemoryAsset.Type type, String mimeType,
+                                       long sizeBytes, String checksumSha256Base64) {
+        return initiateUpload(memoryId, userId, null, type, mimeType, sizeBytes, checksumSha256Base64);
+    }
+
+    /**
+     * {@code clientAssetId}: sealed vaults only. The device encrypts before uploading and binds the file
+     * key to the asset id (security review F6), so it must pick the id first, as it does for memories.
+     */
+    @Transactional
+    public UploadTicket initiateUpload(UUID memoryId, UUID userId, UUID clientAssetId, MemoryAsset.Type type, String mimeType,
                                        long sizeBytes, String checksumSha256Base64) {
         Memory memory = memories.requireDraftOwnedByForUpdate(memoryId, userId);
         boolean sealed = memories.isSealedVault(memory.getVaultId());
+        if (clientAssetId != null && !sealed) {
+            throw ApiException.badRequest("NOT_A_SEALED_VAULT", "Only sealed vaults take a client-chosen asset id");
+        }
+        if (clientAssetId != null) {
+            var existing = assets.findById(clientAssetId);
+            if (existing.isPresent()) {
+                MemoryAsset a = existing.get();
+                // A retry of the same unfinished upload (the device queued it offline, roadmap 3.10): the
+                // ciphertext is bound to this id, so hand out a fresh upload URL instead of refusing.
+                if (a.getMemoryId().equals(memoryId) && a.getUploadStatus() == MemoryAsset.UploadStatus.INITIATED
+                        && a.getSizeBytes() == sizeBytes && a.getChecksumSha256().equals(checksumSha256Base64)
+                        && a.getMimeType().equals(mimeType)) {
+                    ObjectStorage.PresignedUpload again = storage.presignUpload(a.getObjectKey(), mimeType, sizeBytes, checksumSha256Base64);
+                    return new UploadTicket(a.getId(), again.url(), again.method(), again.headers(), again.expiresAt());
+                }
+                throw ApiException.conflict("ASSET_EXISTS", "An asset with this id already exists");
+            }
+        }
         validate(type, mimeType, sealed ? plaintextSize(sizeBytes) : sizeBytes, checksumSha256Base64);
         quotas.requireRoomFor(userId, sizeBytes);
         if (assets.countByMemoryId(memoryId) >= MAX_ASSETS_PER_MEMORY) {
             throw ApiException.badRequest("TOO_MANY_ASSETS", "A memory can hold at most " + MAX_ASSETS_PER_MEMORY + " assets");
         }
-        UUID assetId = UUID.randomUUID();
+        UUID assetId = clientAssetId != null ? clientAssetId : UUID.randomUUID();
         // Opaque key: contains no user-provided names, so nothing about the content leaks through the path.
         String key = "vaults/%s/memories/%s/%s".formatted(memory.getVaultId(), memoryId, assetId);
         // Sealed vault (roadmap 3.6d): the bytes are ciphertext; size and checksum are of the ciphertext.

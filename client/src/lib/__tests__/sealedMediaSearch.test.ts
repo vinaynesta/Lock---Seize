@@ -21,33 +21,33 @@ describe('sealed media', () => {
 
   test('round-trips across chunk boundaries and matches the size the server expects', () => {
     for (const n of [0, 1, 99, 100, 101, 350]) {
-      const ct = encryptMedia(key, 'original', 'mem-1', bytes(n), 100);
+      const ct = encryptMedia(key, 'original', 'mem-1', 'asset-1', bytes(n), 100);
       expect(ct.length).toBe(encryptedSize(n, 100));
-      expect(decryptMedia(key, 'original', 'mem-1', ct, 100)).toEqual(bytes(n));
+      expect(decryptMedia(key, 'original', 'mem-1', 'asset-1', ct, 100)).toEqual(bytes(n));
     }
     // Default 1 MiB chunks: header + plaintext + 16 per chunk (backend E2eFormats.mediaOverhead).
     expect(encryptedSize(3 * (1 << 20))).toBe(16 + 3 * (1 << 20) + 3 * 16);
   });
 
   test('truncation, reordering, tampering, wrong memory or purpose all fail', () => {
-    const ct = encryptMedia(key, 'original', 'mem-1', bytes(350), 100);
+    const ct = encryptMedia(key, 'original', 'mem-1', 'asset-1', bytes(350), 100);
     const step = 116;
-    expect(() => decryptMedia(key, 'original', 'mem-1', ct.subarray(0, MEDIA_HEADER + 2 * step), 100)).toThrow();
+    expect(() => decryptMedia(key, 'original', 'mem-1', 'asset-1', ct.subarray(0, MEDIA_HEADER + 2 * step), 100)).toThrow();
     const swapped = new Uint8Array(ct);
     swapped.set(ct.subarray(MEDIA_HEADER + step, MEDIA_HEADER + 2 * step), MEDIA_HEADER);
     swapped.set(ct.subarray(MEDIA_HEADER, MEDIA_HEADER + step), MEDIA_HEADER + step);
-    expect(() => decryptMedia(key, 'original', 'mem-1', swapped, 100)).toThrow();
+    expect(() => decryptMedia(key, 'original', 'mem-1', 'asset-1', swapped, 100)).toThrow();
     const flipped = new Uint8Array(ct);
     flipped[MEDIA_HEADER + 5] ^= 1;
-    expect(() => decryptMedia(key, 'original', 'mem-1', flipped, 100)).toThrow();
-    expect(() => decryptMedia(key, 'original', 'mem-2', ct, 100)).toThrow();
-    expect(() => decryptMedia(key, 'thumb', 'mem-1', ct, 100)).toThrow();
-    expect(() => decryptMedia(generateVaultKey(), 'original', 'mem-1', ct, 100)).toThrow();
+    expect(() => decryptMedia(key, 'original', 'mem-1', 'asset-1', flipped, 100)).toThrow();
+    expect(() => decryptMedia(key, 'original', 'mem-2', 'asset-1', ct, 100)).toThrow();
+    expect(() => decryptMedia(key, 'thumb', 'mem-1', 'asset-1', ct, 100)).toThrow();
+    expect(() => decryptMedia(generateVaultKey(), 'original', 'mem-1', 'asset-1', ct, 100)).toThrow();
   });
 
   test('two encryptions of the same file look unrelated (fresh salt, so a fresh key)', () => {
-    const a = encryptMedia(key, 'original', 'mem-1', bytes(50));
-    const b = encryptMedia(key, 'original', 'mem-1', bytes(50));
+    const a = encryptMedia(key, 'original', 'mem-1', 'asset-1', bytes(50));
+    const b = encryptMedia(key, 'original', 'mem-1', 'asset-1', bytes(50));
     expect(toBase64(a)).not.toBe(toBase64(b));
   });
 });

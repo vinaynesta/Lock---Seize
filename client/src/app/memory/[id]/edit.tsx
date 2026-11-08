@@ -54,6 +54,7 @@ export default function EditDraft() {
           thought: m.thought,
           feeling: m.feeling,
           location: m.location,
+          coordinates: m.coordinates ?? null,
           occurredAt: m.occurredAt,
           revealAt: m.revealAt,
         }}

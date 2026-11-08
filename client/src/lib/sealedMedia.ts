@@ -2,8 +2,11 @@
  * Media encryption for Sealed Vaults (roadmap 3.6d). Files are encrypted on the device in 1 MiB chunks
  * so large videos never sit in memory whole, and so a truncated or reordered file fails to decrypt.
  *
- *   header (16 bytes): "LKM1" | version 0x01 | file salt (11 random bytes)
- *   file key         : HKDF-SHA256(vault key, salt = file salt, info = "lock:media:v1:<purpose>:<memoryId>")
+ *   header (16 bytes): "LKM1" | version 0x02 | file salt (11 random bytes)
+ *   file key         : HKDF-SHA256(vault key, salt = file salt, info = "lock:media:v2:<purpose>:<memoryId>:<assetId>")
+ *
+ * Version 2 binds the file to its asset (security review F6), so the server can't swap two files of the
+ * same memory. Version-1 files (info "lock:media:v1:<purpose>:<memoryId>") still open, without that binding.
  *   chunk i          : AES-256-GCM(file key, nonce = 0^7 | uint32be(i) | last ? 1 : 0, aad = header) → ct + tag(16)
  *
  * A fresh salt gives every file its own key, so the counter nonces never repeat under one key. The
@@ -25,8 +28,9 @@ const encoder = new TextEncoder();
 
 export type MediaPurpose = 'original' | 'thumb';
 
-function fileKey(vaultKey: Uint8Array, header: Uint8Array, purpose: MediaPurpose, memoryId: string): Uint8Array {
-  return hkdf(sha256, vaultKey, header.subarray(5, 16), encoder.encode(`lock:media:v1:${purpose}:${memoryId}`), 32);
+function fileKey(vaultKey: Uint8Array, header: Uint8Array, purpose: MediaPurpose, memoryId: string, assetId?: string): Uint8Array {
+  const info = header[4] === 2 ? `lock:media:v2:${purpose}:${memoryId}:${assetId}` : `lock:media:v1:${purpose}:${memoryId}`;
+  return hkdf(sha256, vaultKey, header.subarray(5, 16), encoder.encode(info), 32);
 }
 
 function nonce(index: number, last: boolean): Uint8Array {
@@ -43,12 +47,12 @@ export function encryptedSize(plainBytes: number, chunk = MEDIA_CHUNK): number {
 }
 
 /** Streaming encryptor: call `chunk()` for each piece of plaintext (`last` on the final one). */
-export function mediaEncryptor(vaultKey: Uint8Array, purpose: MediaPurpose, memoryId: string) {
+export function mediaEncryptor(vaultKey: Uint8Array, purpose: MediaPurpose, memoryId: string, assetId: string) {
   const header = new Uint8Array(MEDIA_HEADER);
   header.set(MAGIC, 0);
-  header[4] = 1;
+  header[4] = 2;
   header.set(randomBytes(11), 5);
-  const key = fileKey(vaultKey, header, purpose, memoryId);
+  const key = fileKey(vaultKey, header, purpose, memoryId, assetId);
   let index = 0;
   let done = false;
   return {
@@ -62,11 +66,11 @@ export function mediaEncryptor(vaultKey: Uint8Array, purpose: MediaPurpose, memo
 }
 
 /** Streaming decryptor over ciphertext chunks of `chunk + 16` bytes (the last may be shorter). */
-export function mediaDecryptor(vaultKey: Uint8Array, header: Uint8Array, purpose: MediaPurpose, memoryId: string) {
-  if (header.length !== MEDIA_HEADER || MAGIC.some((b, i) => header[i] !== b) || header[4] !== 1) {
+export function mediaDecryptor(vaultKey: Uint8Array, header: Uint8Array, purpose: MediaPurpose, memoryId: string, assetId: string) {
+  if (header.length !== MEDIA_HEADER || MAGIC.some((b, i) => header[i] !== b) || (header[4] !== 1 && header[4] !== 2)) {
     throw new SealedError('Not an encrypted Lock media file');
   }
-  const key = fileKey(vaultKey, header, purpose, memoryId);
+  const key = fileKey(vaultKey, header, purpose, memoryId, assetId);
   let index = 0;
   let done = false;
   return {
@@ -86,16 +90,20 @@ export function mediaDecryptor(vaultKey: Uint8Array, header: Uint8Array, purpose
 }
 
 /** Whole-buffer helpers, for thumbnails and tests. */
-export function encryptMedia(vaultKey: Uint8Array, purpose: MediaPurpose, memoryId: string, plain: Uint8Array, chunk = MEDIA_CHUNK) {
-  const enc = mediaEncryptor(vaultKey, purpose, memoryId);
+export function encryptMedia(
+  vaultKey: Uint8Array, purpose: MediaPurpose, memoryId: string, assetId: string, plain: Uint8Array, chunk = MEDIA_CHUNK,
+) {
+  const enc = mediaEncryptor(vaultKey, purpose, memoryId, assetId);
   const parts: Uint8Array[] = [enc.header];
   const count = Math.max(1, Math.ceil(plain.length / chunk));
   for (let i = 0; i < count; i++) parts.push(enc.chunk(plain.subarray(i * chunk, (i + 1) * chunk), i === count - 1));
   return concat(parts);
 }
 
-export function decryptMedia(vaultKey: Uint8Array, purpose: MediaPurpose, memoryId: string, data: Uint8Array, chunk = MEDIA_CHUNK) {
-  const dec = mediaDecryptor(vaultKey, data.subarray(0, MEDIA_HEADER), purpose, memoryId);
+export function decryptMedia(
+  vaultKey: Uint8Array, purpose: MediaPurpose, memoryId: string, assetId: string, data: Uint8Array, chunk = MEDIA_CHUNK,
+) {
+  const dec = mediaDecryptor(vaultKey, data.subarray(0, MEDIA_HEADER), purpose, memoryId, assetId);
   const parts: Uint8Array[] = [];
   const step = chunk + TAG;
   for (let offset = MEDIA_HEADER; offset < data.length; offset += step) {

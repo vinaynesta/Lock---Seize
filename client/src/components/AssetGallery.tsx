@@ -1,13 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
-import { Image, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Image, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import * as Sharing from 'expo-sharing';
 
 import { api } from '@/api/lock';
-import { openSealedAsset } from '@/lib/sealedFiles';
+import { evictDecrypted, openSealedAsset } from '@/lib/sealedFiles';
 import type { Asset, AssetVariant, UploadStatus } from '@/api/types';
 import { radius, space, useTheme } from '@/theme';
 
+import { MediaPlayer } from './MediaPlayer';
 import { Body } from './ui';
 
 const STATUS_LABEL: Partial<Record<UploadStatus, string>> = {
@@ -29,7 +31,10 @@ export interface SealedMediaContext {
   keyVersion: number;
 }
 
-/** Sealed media: downloaded and decrypted on the device into the cache; tapping shares the original. */
+/**
+ * Sealed media: downloaded and decrypted on the device into the cache. Video and audio play in the
+ * app (the decrypted copy is deleted when the player closes); photos open through the share sheet.
+ */
 function SealedTile({ asset, ctx, onRemove }: { asset: Asset; ctx: SealedMediaContext; onRemove?: () => void }) {
   const t = useTheme();
   const usable = asset.uploadStatus === 'VERIFIED' || asset.uploadStatus === 'ATTACHED';
@@ -40,19 +45,37 @@ function SealedTile({ asset, ctx, onRemove }: { asset: Asset; ctx: SealedMediaCo
     enabled: usable && hasThumb,
     staleTime: Infinity,
   });
+  const [playing, setPlaying] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const playable = asset.type !== 'PHOTO';
   const open = async () => {
-    const uri = await openSealedAsset(ctx.vaultId, ctx.keyVersion, ctx.memoryId, asset, false);
-    await Sharing.shareAsync(uri, { mimeType: asset.mimeType });
+    setBusy(true);
+    try {
+      const uri = await openSealedAsset(ctx.vaultId, ctx.keyVersion, ctx.memoryId, asset, false);
+      if (playable) setPlaying(uri);
+      else await Sharing.shareAsync(uri, { mimeType: asset.mimeType });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const close = () => {
+    setPlaying(null);
+    evictDecrypted(asset.id); // plaintext only lives while it is being played
   };
   return (
     <View style={[styles.tile, { backgroundColor: t.surfaceMuted, borderColor: t.border }]}>
-      <Pressable style={styles.image} disabled={!usable} onPress={() => void open()} accessibilityLabel="Open">
+      <MediaPlayer uri={playing} type={asset.type} onClose={close} />
+      <Pressable
+        style={styles.image}
+        disabled={!usable || busy}
+        onPress={() => void open()}
+        accessibilityLabel={playable ? `Play ${asset.type === 'VIDEO' ? 'video' : 'audio'}` : 'Open photo'}>
         {thumb.data ? (
           <Image source={{ uri: thumb.data }} style={styles.image} accessibilityLabel="Photo" />
         ) : (
           <View style={styles.placeholder}>
             <Text style={{ color: t.textMuted, fontWeight: '600', textAlign: 'center' }}>
-              {usable ? `🔒 ${asset.type === 'VIDEO' ? 'Video' : asset.type === 'AUDIO' ? 'Audio' : 'Photo'}` : (STATUS_LABEL[asset.uploadStatus] ?? asset.uploadStatus)}
+              {busy ? 'Decrypting…' : usable ? (asset.type === 'VIDEO' ? '▶ Video' : asset.type === 'AUDIO' ? '♪ Audio' : 'Photo') : (STATUS_LABEL[asset.uploadStatus] ?? asset.uploadStatus)}
             </Text>
           </View>
         )}
@@ -78,15 +101,22 @@ function AssetTile({ asset, variant, onRemove }: { asset: Asset; variant: AssetV
     staleTime: 10 * 60_000, // presigned URLs last 15 minutes
   });
   const rejected = asset.uploadStatus === 'REJECTED';
+  const [playing, setPlaying] = useState<string | null>(null);
+  const openPlayable = async () => {
+    const uri = await playableUrl(asset);
+    if (Platform.OS === 'web') await Linking.openURL(uri);
+    else setPlaying(uri);
+  };
 
   return (
     <View
       style={[styles.tile, { backgroundColor: t.surfaceMuted, borderColor: rejected ? t.danger : t.border }]}
       accessibilityLabel={rejected ? 'Blocked by the safety check' : undefined}>
+      <MediaPlayer uri={playing} type={asset.type} onClose={() => setPlaying(null)} />
       {wanted && url.data ? (
         <Pressable
           style={styles.image}
-          onPress={() => (asset.type === 'VIDEO' ? openPlayable(asset) : openOriginal(asset.id))}
+          onPress={() => void (asset.type === 'VIDEO' ? openPlayable() : openOriginal(asset.id))}
           accessibilityLabel={asset.type === 'VIDEO' ? 'Play video' : 'Open photo'}>
           <Image source={{ uri: url.data.url }} style={styles.image} accessibilityLabel={asset.type === 'VIDEO' ? 'Video' : 'Photo'} />
           {asset.type === 'VIDEO' ? (
@@ -99,7 +129,7 @@ function AssetTile({ asset, variant, onRemove }: { asset: Asset; variant: AssetV
         <Pressable
           style={styles.placeholder}
           disabled={!usable}
-          onPress={() => (asset.type === 'PHOTO' ? openOriginal(asset.id) : openPlayable(asset))}>
+          onPress={() => void (asset.type === 'PHOTO' ? openOriginal(asset.id) : openPlayable())}>
           <Text style={{ color: rejected ? t.danger : t.textMuted, fontWeight: '600', textAlign: 'center' }}>
             {usable ? (asset.type === 'VIDEO' ? '▶ Video' : '♪ Audio') : (STATUS_LABEL[asset.uploadStatus] ?? asset.uploadStatus)}
           </Text>
@@ -114,10 +144,10 @@ function AssetTile({ asset, variant, onRemove }: { asset: Asset; variant: AssetV
   );
 }
 
-/** Video and audio open the PLAYBACK rendition when there is one (it plays everywhere), else the original. */
-async function openPlayable(asset: Asset) {
+/** Video and audio play the PLAYBACK rendition when there is one (it plays everywhere), else the original. */
+async function playableUrl(asset: Asset): Promise<string> {
   const { url } = await api.downloadUrl(asset.id, asset.variants.includes('PLAYBACK') ? 'PLAYBACK' : undefined);
-  await Linking.openURL(url);
+  return url;
 }
 
 /** Tapping a thumbnail opens the full-size original, fetched only when asked for. */

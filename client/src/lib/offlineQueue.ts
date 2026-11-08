@@ -8,6 +8,8 @@ import { ApiError } from '@/api/client';
 import { api } from '@/api/lock';
 import type { AssetType, MemoryInput } from '@/api/types';
 import { newIdempotencyKey } from '@/lib/format';
+import { discardPreparedUpload, prepareSealedUpload, sendSealedUpload, type PreparedSealedUpload } from '@/lib/sealedFiles';
+import { reencryptSealedDraft, sendSealedDraft, type SealedDraftBody } from '@/lib/sealedVault';
 
 /**
  * Offline drafts and background upload (roadmap 3.5).
@@ -25,6 +27,10 @@ import { newIdempotencyKey } from '@/lib/format';
  * An upload that waits for a draft created offline refers to it by its local id; once the draft
  * exists on the server the local id maps to the real one.
  *
+ * Sealed vaults: the draft is encrypted before it is queued (createSealedDraft), so only ciphertext
+ * waits on the device. If the vault's key version moved on while offline, the device re-encrypts it
+ * under the new key when it holds both; otherwise the item waits until the vault is opened.
+ *
  * Native only: the web build has no durable file storage, and uploads there go straight through.
  */
 
@@ -38,6 +44,27 @@ export type QueueItem =
       vaultId: string;
       input: MemoryInput;
       idempotencyKey: string;
+      attempts: number;
+      lastError?: string;
+    }
+  | {
+      /** Sealed vault: the request body, already encrypted on the device. No plaintext is stored. */
+      kind: 'createSealedDraft';
+      localId: string;
+      vaultId: string;
+      body: SealedDraftBody;
+      idempotencyKey: string;
+      attempts: number;
+      lastError?: string;
+    }
+  | {
+      /** Sealed vault media: already encrypted on the device (ciphertext files only), roadmap 3.10. */
+      kind: 'uploadSealed';
+      localId: string;
+      memoryRef: string;
+      type: AssetType;
+      mimeType: string;
+      prepared: PreparedSealedUpload;
       attempts: number;
       lastError?: string;
     }
@@ -114,9 +141,22 @@ export async function queueUpload(memoryRef: string, uri: string, type: AssetTyp
   void drain();
 }
 
+/**
+ * Sealed vault: encrypts the picked file (and a photo's thumbnail) now, while the vault key is in hand,
+ * into the persistent queue folder, and queues the ciphertext. Nothing plaintext is kept.
+ */
+export async function queueSealedUpload(
+  vaultId: string, keyVersion: number, memoryId: string, uri: string, type: AssetType, mimeType: string,
+): Promise<void> {
+  const prepared = await prepareSealedUpload(vaultId, keyVersion, memoryId, uri, type, mediaDir());
+  const current = await load();
+  await save([...current, { kind: 'uploadSealed', localId: Crypto.randomUUID(), memoryRef: memoryId, type, mimeType, prepared, attempts: 0 }]);
+  void drain();
+}
+
 /** Pending items for one draft (by server id or local id), for showing "waiting to upload" tiles. */
 export function pendingFor(all: QueueItem[], memoryId: string): QueueItem[] {
-  return all.filter((i) => i.kind === 'upload' && (i.memoryRef === memoryId || idMap[i.memoryRef] === memoryId));
+  return all.filter((i) => (i.kind === 'upload' || i.kind === 'uploadSealed') && (i.memoryRef === memoryId || idMap[i.memoryRef] === memoryId));
 }
 
 /** The server id a locally created draft now has, once it has synced. */
@@ -167,6 +207,24 @@ async function process(item: QueueItem) {
     idMap = { ...idMap, [item.localId]: memory.id };
     return;
   }
+  if (item.kind === 'createSealedDraft') {
+    try {
+      const memory = await sendSealedDraft(item.vaultId, item.body, item.idempotencyKey);
+      idMap = { ...idMap, [item.localId]: memory.id };
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.code !== 'STALE_KEY_VERSION') throw e;
+      const fresh = reencryptSealedDraft(item.vaultId, item.body);
+      if (!fresh) throw new ApiError(409, 'STALE_KEY_VERSION', 'The vault has a new key: open the vault, then try again.');
+      await save((await load()).map((i) => (i.localId === item.localId ? { ...item, body: fresh } : i)));
+      const memory = await sendSealedDraft(item.vaultId, fresh, item.idempotencyKey);
+      idMap = { ...idMap, [item.localId]: memory.id };
+    }
+    return;
+  }
+  if (item.kind === 'uploadSealed') {
+    await sendSealedUpload(item.memoryRef, item.type, item.mimeType, item.prepared);
+    return;
+  }
   const memoryId = item.memoryRef.startsWith('local-') ? idMap[item.memoryRef] : item.memoryRef;
   if (!memoryId) throw new Error('Waiting for the draft to sync');
   const file = new File(item.fileUri);
@@ -189,6 +247,7 @@ export async function discard(localId: string) {
     const f = new File(item.fileUri);
     if (f.exists) f.delete();
   }
+  if (item?.kind === 'uploadSealed') discardPreparedUpload(item.prepared);
   await save(current.filter((i) => i.localId !== localId));
 }
 
@@ -197,6 +256,15 @@ export async function retryFailed() {
   const current = await load();
   await save(current.map((i) => ({ ...i, attempts: 0, lastError: undefined })));
   await drain();
+}
+
+/** Queues an encrypted sealed draft that couldn't be sent; same id and Idempotency-Key as the first try. */
+export async function queueSealedDraft(vaultId: string, body: SealedDraftBody, idempotencyKey: string): Promise<string> {
+  const current = await load();
+  const localId = `local-${Crypto.randomUUID()}`;
+  await save([...current, { kind: 'createSealedDraft', localId, vaultId, body, idempotencyKey, attempts: 0 }]);
+  void drain();
+  return localId;
 }
 
 /** Called once at startup: drain now, and whenever connectivity comes back. */

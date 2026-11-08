@@ -30,15 +30,21 @@ public class VaultMemberKey {
     @Column(nullable = false, updatable = false)
     private UUID wrappedBy;
 
+    /** The wrapper's public key at the time (format-v2 wraps are verified with it); null on v1 rows. */
+    @Column(updatable = false)
+    private byte[] wrappedByPublicKey;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
     protected VaultMemberKey() {}
 
-    VaultMemberKey(UUID vaultId, UUID userId, int keyVersion, byte[] wrappedKey, UUID wrappedBy, Instant now) {
+    VaultMemberKey(UUID vaultId, UUID userId, int keyVersion, byte[] wrappedKey, UUID wrappedBy, byte[] wrappedByPublicKey,
+                   Instant now) {
         this.id = new Id(vaultId, userId, keyVersion);
         this.wrappedKey = wrappedKey;
         this.wrappedBy = wrappedBy;
+        this.wrappedByPublicKey = wrappedByPublicKey;
         this.createdAt = now;
     }
 
@@ -47,5 +53,6 @@ public class VaultMemberKey {
     public int getKeyVersion() { return id.keyVersion(); }
     public byte[] getWrappedKey() { return wrappedKey.clone(); }
     public UUID getWrappedBy() { return wrappedBy; }
+    public byte[] getWrappedByPublicKey() { return wrappedByPublicKey == null ? null : wrappedByPublicKey.clone(); }
     public Instant getCreatedAt() { return createdAt; }
 }

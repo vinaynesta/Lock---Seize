@@ -131,14 +131,31 @@ public class SearchIndex {
         return jdbc.queryForList(sql.toString(), UUID.class, args.toArray());
     }
 
-    /** Memories with no tokens yet (created before 3.4), for the backfill. */
+    /** Memories with no tokens yet (created before 3.4), for the server backfill. Sealed vaults are the devices' job. */
     @Transactional(readOnly = true)
     public List<UUID> unindexed(int limit) {
         return jdbc.queryForList("""
                 SELECT m.id FROM memories m
-                WHERE NOT EXISTS (SELECT 1 FROM memory_search_tokens t WHERE t.memory_id = m.id)
+                JOIN vaults v ON v.id = m.vault_id
+                WHERE v.encryption <> 'SEALED'
+                  AND NOT EXISTS (SELECT 1 FROM memory_search_tokens t WHERE t.memory_id = m.id)
                   AND NOT EXISTS (SELECT 1 FROM search_index_skips s WHERE s.memory_id = m.id)
                 ORDER BY m.created_at LIMIT ?""", UUID.class, limit);
+    }
+
+    /**
+     * Sealed vault: the caller's own memories in this vault that have no device-computed tokens yet
+     * (written before 3.6f), so their device can index them. Closed time capsules wait until they open.
+     */
+    @Transactional(readOnly = true)
+    public List<UUID> unindexedSealed(UUID vaultId, UUID createdBy, java.time.Instant now, int limit) {
+        return jdbc.queryForList("""
+                SELECT m.id FROM memories m
+                WHERE m.vault_id = ? AND m.created_by = ?
+                  AND NOT (m.state IN ('LOCKED', 'ARCHIVED') AND m.reveal_at IS NOT NULL AND m.reveal_at > ?)
+                  AND NOT EXISTS (SELECT 1 FROM memory_search_tokens t WHERE t.memory_id = m.id)
+                  AND NOT EXISTS (SELECT 1 FROM search_index_skips s WHERE s.memory_id = m.id)
+                ORDER BY m.created_at LIMIT ?""", UUID.class, vaultId, createdBy, java.sql.Timestamp.from(now), limit);
     }
 
     /** Remembers that a memory has nothing to index (e.g. only punctuation), so the backfill stops retrying it. */

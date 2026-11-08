@@ -41,6 +41,9 @@ export async function registerForPush(): Promise<void> {
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('default', {
         name: 'Lock',
+        // Exported at runtime (build/index.js re-exports NotificationChannelManager.types); the lint
+        // rule can't follow the compiled enum in expo-notifications 58.
+        // eslint-disable-next-line import/namespace
         importance: Notifications.AndroidImportance.DEFAULT,
       });
     }

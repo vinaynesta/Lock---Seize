@@ -175,11 +175,12 @@ public class MemoryController {
             @Size(max = 300) String location,
             Instant occurredAt,
             Instant revealAt,
-            @Valid SealedFields sealed) {
+            @Valid SealedFields sealed,
+            MemoryView.Coordinates coordinates) {
 
         MemoryService.Content toContent() {
             return new MemoryService.Content(title, thought, feeling, location, occurredAt, revealAt,
-                    sealed == null ? null : sealed.toContent());
+                    sealed == null ? null : sealed.toContent(), coordinates);
         }
     }
 
@@ -187,9 +188,9 @@ public class MemoryController {
     /** {@code searchTokens}: base64 16-byte blind tokens computed on the device (roadmap 3.6f); optional. */
     public record SealedFields(int keyVersion, @Size(max = 300) String title, @Size(max = 110_000) String thought,
                                @Size(max = 1_200) String feeling, @Size(max = 1_700) String location,
-                               List<String> searchTokens) {
+                               List<String> searchTokens, @Size(max = 200) String coordinates) {
         MemoryService.SealedContent toContent() {
-            return new MemoryService.SealedContent(keyVersion, title, thought, feeling, location, searchTokens);
+            return new MemoryService.SealedContent(keyVersion, title, thought, feeling, location, searchTokens, coordinates);
         }
     }
 
@@ -198,6 +199,13 @@ public class MemoryController {
     public List<MemoryView> searchSealed(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID vaultId,
                                          @RequestBody SealedSearchRequest req) {
         return memories.searchSealed(vaultId, CurrentUser.id(jwt), req.words(), req.limit() == null ? 50 : req.limit());
+    }
+
+    /** Sealed vault: the caller's memories written before on-device search, for their device to index. */
+    @GetMapping("/vaults/{vaultId}/search/unindexed")
+    public List<UUID> unindexedSealed(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID vaultId,
+                                      @RequestParam(defaultValue = "100") int limit) {
+        return memories.unindexedSealed(vaultId, CurrentUser.id(jwt), limit);
     }
 
     @PutMapping("/memories/{memoryId}/search-tokens")
