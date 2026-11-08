@@ -21,7 +21,8 @@
       "package": "app.lock.client"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "output": "static"
     },
     "plugins": [
       "expo-router",
@@ -43,6 +44,22 @@
           "cameraPermission": "Lock uses the camera only to scan the code that approves your other device for sealed vaults.",
           "microphonePermission": false,
           "recordAudioAndroid": false
+        }
+      ],
+      "expo-video",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Lock uses your location only when you ask it to pin a memory where you are.",
+          "locationAlwaysAndWhenInUsePermission": false,
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false
+        }
+      ],
+      [
+        "expo-maps",
+        {
+          "requestLocationPermission": false
         }
       ]
     ],

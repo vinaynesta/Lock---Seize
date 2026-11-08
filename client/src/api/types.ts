@@ -111,7 +111,8 @@ export interface DeviceApproval {
 export interface VaultKeyState {
   vaultId: string;
   currentVersion: number;
-  myKeys: { keyVersion: number; wrappedKey: string; wrappedBy: string; createdAt: string }[];
+  /** `wrappedByPublicKey`: the wrapper's key when the copy was stored (format-2 copies are verified with it). */
+  myKeys: { keyVersion: number; wrappedKey: string; wrappedBy: string; wrappedByPublicKey: string | null; createdAt: string }[];
   members: { userId: string; publicKey: string; fingerprint: string }[];
   /** Active members who don't have the current version yet. */
   missingCurrent: string[];
@@ -124,6 +125,14 @@ export interface EncryptedFields {
   thought: string | null;
   feeling: string | null;
   location: string | null;
+  /** Encrypted "lat,lng" (roadmap 5.1). */
+  coordinates?: string | null;
+}
+
+/** A memory's map position, WGS 84 degrees (roadmap 5.1). */
+export interface Coordinates {
+  latitude: number;
+  longitude: number;
 }
 
 export interface Member {
@@ -184,6 +193,8 @@ export interface Memory {
   thought: string | null;
   feeling: string | null;
   location: string | null;
+  /** Map position; null when not pinned (or, in a sealed vault, until decrypted on the device). */
+  coordinates?: Coordinates | null;
   occurredAt: string;
   revealAt: string | null;
   sealedCapsule: boolean;
@@ -203,6 +214,7 @@ export interface MemoryInput {
   location?: string | null;
   occurredAt?: string | null;
   revealAt?: string | null;
+  coordinates?: Coordinates | null;
 }
 
 export interface Reflection {

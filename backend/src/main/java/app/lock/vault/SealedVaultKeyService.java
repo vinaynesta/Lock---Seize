@@ -111,13 +111,17 @@ public class SealedVaultKeyService {
         }
         Map<UUID, byte[]> publicKeys = new HashMap<>();
         bundles.forUsers(wrapped.keySet()).forEach(b -> publicKeys.put(b.getUserId(), b.getPublicKey()));
+        // Format-v2 wraps are authenticated by the wrapper's key (review F2); kept on the row so the
+        // recipient can verify it even after the wrapper's account (and bundle) is gone.
+        byte[] wrapperKey = bundles.find(userId).map(KeyBundle::getPublicKey)
+                .orElseThrow(() -> ApiException.conflict("KEY_BUNDLE_REQUIRED", "Set up Sealed Vault keys first"));
         Instant now = Instant.now(clock);
         for (Map.Entry<UUID, String> e : wrapped.entrySet()) {
             if (!publicKeys.containsKey(e.getKey())) {
                 throw ApiException.conflict("KEY_BUNDLE_REQUIRED", "Member " + e.getKey() + " has no Sealed Vault keys yet");
             }
             keys.save(new VaultMemberKey(vaultId, e.getKey(), version,
-                    E2eFormats.wrappedVaultKey(e.getValue(), "keys." + e.getKey()), userId, now));
+                    E2eFormats.wrappedVaultKey(e.getValue(), "keys." + e.getKey()), userId, wrapperKey, now));
         }
         audit.record(AuditEventType.VAULT_MEMBER_KEYS_ADDED, userId, vaultId, null,
                 Map.of("keyVersion", version, "recipients", wrapped.size(), "newVersion", existing.isEmpty()));

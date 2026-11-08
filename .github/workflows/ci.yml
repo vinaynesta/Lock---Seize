@@ -55,3 +55,20 @@ jobs:
       - run: npx tsc --noEmit
       - run: npx expo lint
       - run: npx jest --ci
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/docs-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: tools/docs-check/package-lock.json
+      - run: npm ci
+      # Every Mermaid diagram in docs/ must parse; GitHub shows a broken one as an error box.
+      - run: npm run check

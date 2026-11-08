@@ -8,16 +8,16 @@ import { api } from '@/api/lock';
 import type { Asset, Memory } from '@/api/types';
 import { assetTypeOf, mimeTypeOf, uploadPickedAsset } from '@/api/upload';
 import { AssetGallery } from '@/components/AssetGallery';
-import { Body, Button, Card, ErrorText, Field, Label, Loading, Screen, StateBadge, Title } from '@/components/ui';
+import { Body, Button, Card, ErrorText, Field, Loading, Screen, Section, StateBadge, TextLink, Title } from '@/components/ui';
 import { PendingSync } from '@/components/PendingSync';
 import { SealedGate } from '@/components/SealedGate';
 import { uploadSealedFile } from '@/lib/sealedFiles';
 import { addSealedReflection } from '@/lib/sealedVault';
 import { useSealedVault, type SealedState } from '@/lib/useSealed';
 import { confirm } from '@/lib/confirm';
-import { drain, offlineSupported, queueUpload } from '@/lib/offlineQueue';
+import { drain, offlineSupported, queueSealedUpload, queueUpload } from '@/lib/offlineQueue';
 import { formatDate, formatDateTime, timeUntil } from '@/lib/format';
-import { space, useTheme } from '@/theme';
+import { mono, space, useTheme } from '@/theme';
 
 export default function MemoryDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -55,13 +55,17 @@ export default function MemoryDetail() {
 
   return (
     <Screen>
-      <View style={{ gap: space.sm }}>
+      <View style={{ gap: space.md }}>
         <StateBadge state={m.state} capsule={m.sealedCapsule} />
-        <Title>{m.sealedCapsule ? 'Sealed time capsule' : (m.title ?? '🔒 Encrypted memory')}</Title>
-        <Body muted>
-          {formatDate(m.occurredAt)}
-          {m.location && !m.sealedCapsule ? ` · ${m.location}` : ''}
-        </Body>
+        <Title
+          subtitle={`${formatDate(m.occurredAt)}${m.location && !m.sealedCapsule ? ` · ${m.location}` : ''}`}>
+          {m.sealedCapsule ? 'Sealed time capsule' : (m.title ?? 'Encrypted memory')}
+        </Title>
+        {m.coordinates && !m.sealedCapsule ? (
+          <View style={{ alignSelf: 'flex-start' }}>
+            <TextLink title="📍 See on the map" onPress={() => router.push({ pathname: '/vault/[id]/map', params: { id: m.vaultId } })} />
+          </View>
+        ) : null}
       </View>
 
       {m.sealedCapsule ? (
@@ -71,8 +75,8 @@ export default function MemoryDetail() {
         </Card>
       ) : (
         <>
-          {m.thought ? <Body style={{ fontSize: 17, lineHeight: 26 }}>{m.thought}</Body> : null}
-          {m.feeling ? <Body muted>Feeling {m.feeling}</Body> : null}
+          {m.thought ? <Body style={{ fontSize: 18, lineHeight: 29 }}>{m.thought}</Body> : null}
+          {m.feeling ? <Body muted style={{ fontStyle: 'italic' }}>Feeling {m.feeling}</Body> : null}
         </>
       )}
 
@@ -123,10 +127,16 @@ function DraftActions({
     try {
       if (sealedVault) {
         if (sealed.status !== 'ready') throw new Error('Unlock your Sealed Vault keys first.');
-        // Encrypted on this device, then uploaded; nothing plaintext is queued or sent.
+        // Encrypted on this device first. On native the ciphertext waits in the queue and uploads when
+        // online (survives going offline or closing the app); nothing plaintext is queued or sent.
         for (const picked of result.assets) {
-          await uploadSealedFile(memory.vaultId, sealed.keyVersion, memory.id, picked.uri, assetTypeOf(picked), mimeTypeOf(picked));
+          if (offlineSupported) {
+            await queueSealedUpload(memory.vaultId, sealed.keyVersion, memory.id, picked.uri, assetTypeOf(picked), mimeTypeOf(picked));
+          } else {
+            await uploadSealedFile(memory.vaultId, sealed.keyVersion, memory.id, picked.uri, assetTypeOf(picked), mimeTypeOf(picked));
+          }
         }
+        if (offlineSupported) await drain();
       } else if (offlineSupported) {
         // Copied to app storage and uploaded in the background: survives going offline or closing the app.
         for (const picked of result.assets) {
@@ -165,7 +175,7 @@ function DraftActions({
       />
       <PendingSync />
       <Button title={uploading ? (sealedVault ? 'Encrypting and uploading…' : 'Uploading…') : 'Add photos or videos'} variant="secondary" onPress={pick} loading={uploading} />
-      {sealedVault ? <Body muted style={{ fontSize: 13 }}>🔒 Encrypted on this device before upload. Not virus-scanned: only members can open it.</Body> : null}
+      {sealedVault ? <Body muted style={{ fontSize: 13 }}>Encrypted on this device before upload. Not virus-scanned: only members can open it.</Body> : null}
       <ErrorText error={uploadError ?? removeAsset.error} />
 
       <Button
@@ -174,8 +184,8 @@ function DraftActions({
         onPress={() => router.push({ pathname: '/memory/[id]/edit', params: { id: memory.id } })}
       />
 
-      <Card>
-        <Body style={{ fontWeight: '600' }}>Lock this memory</Body>
+      <Card style={{ gap: space.md }}>
+        <Body style={{ fontWeight: '600', fontSize: 17 }}>Lock this memory</Body>
         <Body muted>
           Locking preserves it as it is now. You get a 24-hour window to change your mind. After that it is permanent
           and can’t be edited.
@@ -199,7 +209,7 @@ function DraftActions({
       <ErrorText error={discard.error} />
       <Button
         title="Discard draft"
-        variant="danger"
+        variant="ghost"
         onPress={() => confirm('Discard this draft?', 'It has not been locked, so it will be deleted.', 'Discard', () => discard.mutate())}
       />
     </View>
@@ -251,9 +261,9 @@ function LockedPanel({
     enabled: showProof,
   });
   const addReflection = useMutation({
-    mutationFn: () =>
+    mutationFn: async () =>
       sealed.status === 'ready'
-        ? addSealedReflection(memory.vaultId, sealed.keyVersion, memory.id, reflection.trim())
+        ? addSealedReflection(memory.vaultId, sealed.keyVersion, memory.id, reflection.trim(), (await api.me()).id)
         : api.addReflection(memory.id, reflection.trim()),
     onSuccess: () => {
       setReflection('');
@@ -267,22 +277,21 @@ function LockedPanel({
 
   return (
     <View style={{ gap: space.lg }}>
-      <Body muted>Locked {formatDate(memory.lockedAt)}</Body>
+      <Body muted style={{ fontSize: 14 }}>Locked {formatDate(memory.lockedAt)}</Body>
       <Button
         title="Relive"
         onPress={() => router.push({ pathname: '/memory/[id]/relive', params: { id: memory.id } })}
       />
 
-      <View style={{ gap: space.sm }}>
-        <Label>Reflections</Label>
-        <Body muted>The original stays sealed. Reflections add to it over time.</Body>
+      <Section title="Reflections">
+        <Body muted style={{ fontSize: 15 }}>The original stays sealed. Reflections add to it over time.</Body>
         {reflections.data?.map((r) => (
-          <Card key={r.id}>
+          <View key={r.id} style={{ gap: space.xs, paddingLeft: space.md, borderLeftWidth: 2, borderLeftColor: t.border }}>
             <Body muted style={{ fontSize: 13 }}>
               {formatDate(r.createdAt)}
             </Body>
-            <Body>{r.body ?? '🔒 Encrypted'}</Body>
-          </Card>
+            <Body>{r.body ?? 'Encrypted'}</Body>
+          </View>
         ))}
         <Field
           label="Add a reflection"
@@ -300,10 +309,9 @@ function LockedPanel({
           loading={addReflection.isPending}
           disabled={!reflection.trim() || (sealed.status !== 'server' && sealed.status !== 'ready')}
         />
-      </View>
+      </Section>
 
-      <View style={{ gap: space.sm }}>
-        <Label>Proof of preservation</Label>
+      <Section title="Proof of preservation">
         {!showProof ? (
           <Button title="Verify integrity" variant="secondary" onPress={() => setShowProof(true)} />
         ) : integrity.isPending ? (
@@ -318,27 +326,27 @@ function LockedPanel({
             <Body muted style={{ fontSize: 12 }}>
               {integrity.data.assetsChecked} media file{integrity.data.assetsChecked === 1 ? '' : 's'} checked
             </Body>
-            <Body muted style={{ fontSize: 11, fontFamily: 'monospace' }}>
+            <Body muted selectable style={{ fontSize: 11, fontFamily: mono }}>
               SHA-256 {integrity.data.sealedHash}
             </Body>
           </Card>
         ) : (
           <ErrorText error={integrity.error} />
         )}
-      </View>
+      </Section>
 
       {isCreator ? (
         <View style={{ gap: space.sm }}>
           <ErrorText error={archive.error} />
           <Button
             title={memory.state === 'ARCHIVED' ? 'Move back to timeline' : 'Archive'}
-            variant="secondary"
+            variant="ghost"
             onPress={() => archive.mutate()}
             loading={archive.isPending}
           />
           <Button
             title="Request deletion"
-            variant="secondary"
+            variant="ghost"
             onPress={() => router.push({ pathname: '/memory/[id]/delete', params: { id: memory.id } })}
           />
         </View>

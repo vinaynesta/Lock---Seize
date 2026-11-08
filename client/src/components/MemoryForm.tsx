@@ -1,10 +1,14 @@
 import { useState } from 'react';
-import { Switch, View } from 'react-native';
+import { Platform, Switch, Text, View } from 'react-native';
 
-import type { MemoryInput } from '@/api/types';
+import type { Coordinates, MemoryInput } from '@/api/types';
+import { currentPosition, formatPin, geocodingSupported, lookUpPlace } from '@/lib/geo';
+
+import { mapSupported } from './MemoryMap';
+import { PinPicker } from './PinPicker';
 import { space, useTheme } from '@/theme';
 
-import { Body, Button, ErrorText, Field } from './ui';
+import { Body, Button, ErrorText, Field, TextLink } from './ui';
 
 function toDateInput(iso: string | null | undefined): string {
   return iso ? iso.slice(0, 10) : '';
@@ -36,6 +40,24 @@ export function MemoryForm({
   const [thought, setThought] = useState(initial?.thought ?? '');
   const [feeling, setFeeling] = useState(initial?.feeling ?? '');
   const [location, setLocation] = useState(initial?.location ?? '');
+  const [coordinates, setCoordinates] = useState<Coordinates | null>(initial?.coordinates ?? null);
+  const [locating, setLocating] = useState(false);
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+
+  const pin = async (find: () => Promise<Coordinates | null>, notFound: string) => {
+    setLocating(true);
+    setPinError(null);
+    try {
+      const found = await find();
+      if (found) setCoordinates(found);
+      else setPinError(notFound);
+    } catch (e) {
+      setPinError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLocating(false);
+    }
+  };
   const [occurredOn, setOccurredOn] = useState(toDateInput(initial?.occurredAt));
   const [capsule, setCapsule] = useState(!!initial?.revealAt);
   const [revealOn, setRevealOn] = useState(toDateInput(initial?.revealAt));
@@ -58,6 +80,7 @@ export function MemoryForm({
       thought: thought.trim() || null,
       feeling: feeling.trim() || null,
       location: location.trim() || null,
+      coordinates,
       occurredAt: occurredAt ?? null,
       revealAt: revealAt ?? null,
     });
@@ -76,6 +99,42 @@ export function MemoryForm({
       />
       <Field label="How did it feel?" placeholder="nervous, grateful, free…" value={feeling} onChangeText={setFeeling} maxLength={200} />
       <Field label="Where (optional)" value={location} onChangeText={setLocation} maxLength={300} />
+      <View style={{ gap: space.sm }}>
+        <Text style={{ color: t.textMuted, fontSize: 14, fontWeight: '500' }}>On the map (optional)</Text>
+        <Body muted={!coordinates} style={{ fontSize: 15 }}>
+          {coordinates ? `📍 ${formatPin(coordinates)}` : 'Not pinned yet. Pinned memories appear on the vault’s map.'}
+        </Body>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.lg, alignItems: 'center' }}>
+          <TextLink
+            title={locating ? 'Locating…' : 'Use my location'}
+            onPress={() => void pin(currentPosition, 'Couldn’t get your position.')}
+          />
+          {geocodingSupported && location.trim() ? (
+            <TextLink
+              title="Find “Where” on the map"
+              onPress={() => void pin(() => lookUpPlace(location), `Couldn’t find “${location.trim()}”. Try a fuller address.`)}
+            />
+          ) : null}
+          {mapSupported ? <TextLink title="Pick on the map" onPress={() => setPicking(true)} /> : null}
+          {coordinates ? <TextLink title="Remove pin" muted onPress={() => setCoordinates(null)} /> : null}
+        </View>
+        {pinError ? <Body style={{ fontSize: 13, color: t.danger }}>{pinError}</Body> : null}
+        <PinPicker
+          visible={picking}
+          initial={coordinates}
+          onPick={(c) => {
+            setCoordinates(c);
+            setPinError(null);
+            setPicking(false);
+          }}
+          onClose={() => setPicking(false)}
+        />
+        {Platform.OS !== 'web' ? (
+          <Body muted style={{ fontSize: 12 }}>
+            The position is stored encrypted with the memory and can’t change once it’s locked.
+          </Body>
+        ) : null}
+      </View>
       <Field
         label="When (YYYY-MM-DD, defaults to today)"
         placeholder="2026-06-15"

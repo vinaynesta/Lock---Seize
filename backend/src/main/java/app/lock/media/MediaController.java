@@ -36,7 +36,8 @@ public class MediaController {
     @ResponseStatus(HttpStatus.CREATED)
     public MediaService.UploadTicket initiate(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID memoryId,
                                              @Valid @RequestBody UploadRequest req) {
-        return media.initiateUpload(memoryId, CurrentUser.id(jwt), req.type(), req.mimeType(), req.sizeBytes(), req.checksumSha256());
+        return media.initiateUpload(memoryId, CurrentUser.id(jwt), req.id(), req.type(), req.mimeType(), req.sizeBytes(),
+                req.checksumSha256());
     }
 
     @PostMapping("/assets/{assetId}/complete")
@@ -91,7 +92,9 @@ public class MediaController {
         media.removeFromDraft(assetId, CurrentUser.id(jwt));
     }
 
+    /** {@code id}: optional, sealed vaults only (the device binds its encryption to it). */
     public record UploadRequest(
+            UUID id,
             @NotNull MemoryAsset.Type type,
             @NotBlank String mimeType,
             @Positive long sizeBytes,

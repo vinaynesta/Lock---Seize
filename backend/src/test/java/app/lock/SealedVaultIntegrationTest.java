@@ -154,6 +154,49 @@ class SealedVaultIntegrationTest extends IntegrationTest {
     }
 
     @Test
+    void newWrapsMustBeAuthenticated_andCarryTheWrappersPublicKey() throws Exception {
+        TestUser kai = withBundle("Kai");
+        TestUser lia = withBundle("Lia");
+        String vault = sealedVault(kai);
+        invite(kai, vault, lia);
+        // Security review F2: the unauthenticated version-1 wrap is refused for new uploads.
+        String current = keysJson(kai, lia);
+        byte[] v1 = random(93);
+        v1[0] = 1;
+        String v1Json = "{\"keys\":{\"" + kai.id() + "\":\"" + Base64.getEncoder().encodeToString(v1) + "\",\""
+                + lia.id() + "\":\"" + Base64.getEncoder().encodeToString(v1) + "\"}}";
+        mvc.perform(json(post("/vaults/" + vault + "/keys/1"), v1Json).with(kai.auth()))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("LEGACY_KEY_FORMAT"));
+        mvc.perform(json(post("/vaults/" + vault + "/keys/1"), current).with(kai.auth())).andExpect(status().isOk());
+
+        // Lia's device gets Kai's public key next to the copy he wrapped, to verify the wrap.
+        java.util.List<String> kaiKeys = com.jayway.jsonpath.JsonPath.read(mvc.perform(get("/vaults/" + vault + "/keys")
+                .with(kai.auth())).andReturn().getResponse().getContentAsString(),
+                "$.members[?(@.userId=='" + kai.id() + "')].publicKey");
+        String kaiKey = kaiKeys.get(0);
+        mvc.perform(get("/vaults/" + vault + "/keys").with(lia.auth()))
+                .andExpect(jsonPath("$.myKeys[0].wrappedBy").value(kai.id().toString()))
+                .andExpect(jsonPath("$.myKeys[0].wrappedByPublicKey").value(kaiKey));
+    }
+
+    @Test
+    void coordinatesInASealedVaultAreDeviceEncrypted_plaintextIsRefused() throws Exception {
+        TestUser mia = withBundle("Mia");
+        String vault = readyVault(mia);
+        // Roadmap 5.1: a map position is content, so plaintext coordinates are refused like any other field.
+        mvc.perform(json(post("/vaults/" + vault + "/memories"), sealedMemoryJson(UUID.randomUUID(), 1)
+                        .replace("\"sealed\"", "\"coordinates\":{\"latitude\":1,\"longitude\":2},\"sealed\"")).with(mia.auth()))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("PLAINTEXT_IN_SEALED_VAULT"));
+        String coords = ct(20);
+        UUID id = UUID.randomUUID();
+        mvc.perform(json(post("/vaults/" + vault + "/memories"), sealedMemoryJson(id, 1)
+                        .replace("\"keyVersion\":1,", "\"keyVersion\":1,\"coordinates\":\"" + coords + "\",")).with(mia.auth()))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.encrypted.coordinates").value(coords))
+                .andExpect(jsonPath("$.coordinates").doesNotExist());
+    }
+
+    @Test
     void onlyHoldersShare_onlyMembersReceive_nonMembersSeeNothing() throws Exception {
         TestUser hal = withBundle("Hal");
         TestUser ivy = withBundle("Ivy");
@@ -314,9 +357,10 @@ class SealedVaultIntegrationTest extends IntegrationTest {
         // Plaintext search can't work either; the device sends tokens instead.
         mvc.perform(get("/vaults/" + vault + "/search").param("q", "anything").with(sam.auth()))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("SEALED_SEARCH_NEEDS_TOKENS"));
+        // The server backfill leaves sealed memories alone, so the creator's device can still index them.
         searchBackfill.run();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM search_index_skips WHERE memory_id = ?::uuid", Integer.class,
-                id.toString())).isEqualTo(1);
+                id.toString())).isZero();
     }
 
     @Test
@@ -371,7 +415,7 @@ class SealedVaultIntegrationTest extends IntegrationTest {
         StringBuilder sb = new StringBuilder("{\"keys\":{");
         for (int i = 0; i < recipients.length; i++) {
             byte[] wrapped = random(93);
-            wrapped[0] = 1;
+            wrapped[0] = 2; // version-2 (authenticated) wrap
             sb.append(i > 0 ? "," : "").append('"').append(recipients[i].id()).append("\":\"")
                     .append(Base64.getEncoder().encodeToString(wrapped)).append('"');
         }

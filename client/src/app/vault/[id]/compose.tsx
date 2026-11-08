@@ -9,8 +9,8 @@ import { MemoryForm } from '@/components/MemoryForm';
 import { SealedGate } from '@/components/SealedGate';
 import { Body, Screen } from '@/components/ui';
 import { newIdempotencyKey } from '@/lib/format';
-import { offlineSupported, queueDraft } from '@/lib/offlineQueue';
-import { createSealedMemory } from '@/lib/sealedVault';
+import { offlineSupported, queueDraft, queueSealedDraft } from '@/lib/offlineQueue';
+import { buildSealedDraft, sendSealedDraft } from '@/lib/sealedVault';
 import { useSealedVault } from '@/lib/useSealed';
 
 export default function Compose() {
@@ -24,8 +24,14 @@ export default function Compose() {
   const create = useMutation({
     mutationFn: async (input: MemoryInput) => {
       if (sealed.status === 'ready') {
-        // Encrypted here; never queued offline in plaintext. (Offline sealed drafts: a later 3.6 piece.)
-        return { memory: await createSealedMemory(vault.data!, sealed.keyVersion, input, idempotencyKey), queued: undefined };
+        // Encrypted here first; offline, the ciphertext (never the plaintext) waits in the queue.
+        const body = buildSealedDraft(vault.data!, sealed.keyVersion, input);
+        try {
+          return { memory: await sendSealedDraft(id, body, idempotencyKey), queued: undefined };
+        } catch (e) {
+          if (offlineSupported && !(e instanceof ApiError)) return { memory: undefined, queued: await queueSealedDraft(id, body, idempotencyKey) };
+          throw e;
+        }
       }
       try {
         return { memory: await api.createMemory(id, input, idempotencyKey), queued: undefined };
@@ -52,7 +58,7 @@ export default function Compose() {
 
   return (
     <Screen>
-      {sealed.status === 'ready' ? <Body>🔒 Encrypted on this device before it is sent.</Body> : null}
+      {sealed.status === 'ready' ? <Body muted style={{ fontSize: 14 }}>Encrypted on this device before it is sent.</Body> : null}
       <Body muted>
         This starts as a draft. You can add photos and edit it until you lock it. Offline? It is saved on this device and
         synced when you are back online.

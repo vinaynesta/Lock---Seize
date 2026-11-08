@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { Link, router, Stack, useLocalSearchParams } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { View } from 'react-native';
 
 import { api } from '@/api/lock';
 import type { Memory, MemoryState } from '@/api/types';
@@ -10,8 +10,8 @@ import { PendingSync } from '@/components/PendingSync';
 import { SealedGate } from '@/components/SealedGate';
 import { searchSealed } from '@/lib/sealedVault';
 import { useSealedVault } from '@/lib/useSealed';
-import { Body, Button, Empty, ErrorText, Field, Label, Loading, Screen } from '@/components/ui';
-import { radius, space, useTheme } from '@/theme';
+import { Body, Button, Chip, Empty, ErrorText, Field, Label, Loading, Screen, TextLink } from '@/components/ui';
+import { space } from '@/theme';
 
 const FILTERS: { label: string; state?: MemoryState }[] = [
   { label: 'All' },
@@ -35,7 +35,6 @@ function byYear(memories: Memory[]): [string, Memory[]][] {
 
 export default function VaultTimeline() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const t = useTheme();
   const [filter, setFilter] = useState<MemoryState | undefined>();
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -68,19 +67,19 @@ export default function VaultTimeline() {
       <Stack.Screen
         options={{
           title: vault.data?.name ?? 'Vault',
-          headerRight: () =>
-            vault.data?.type === 'SHARED' ? (
-              <Link href={{ pathname: '/vault/[id]/members', params: { id } }} asChild>
-                <Pressable hitSlop={12}>
-                  <Text style={{ color: t.accent, fontSize: 16 }}>Members</Text>
-                </Pressable>
-              </Link>
-            ) : null,
+          headerRight: () => (
+            <View style={{ flexDirection: 'row', gap: space.lg }}>
+              <TextLink title="Map" onPress={() => router.push({ pathname: '/vault/[id]/map', params: { id } })} />
+              {vault.data?.type === 'SHARED' ? (
+                <TextLink title="Members" onPress={() => router.push({ pathname: '/vault/[id]/members', params: { id } })} />
+              ) : null}
+            </View>
+          ),
         }}
       />
 
       <SealedGate state={sealed} />
-      {isSealed && sealed.status === 'ready' ? <Body muted>🔒 End-to-end encrypted. Only members’ devices can read it.</Body> : null}
+      {isSealed && sealed.status === 'ready' ? <Body muted style={{ fontSize: 14 }}>End-to-end encrypted. Only members’ devices can read it.</Body> : null}
 
       <Button
         title="Capture a memory"
@@ -116,32 +115,9 @@ export default function VaultTimeline() {
 
       {debounced ? null : (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
-          {FILTERS.map((f) => {
-            const active = f.state === filter;
-            return (
-              <Pressable
-                key={f.label}
-                onPress={() => setFilter(f.state)}
-                accessibilityRole="button"
-                accessibilityState={{ selected: active }}
-                style={{
-                  paddingHorizontal: space.md,
-                  paddingVertical: space.xs + 2,
-                  borderRadius: radius.lg,
-                  borderWidth: 1,
-                  borderColor: active ? t.accent : t.border,
-                  backgroundColor: active ? t.accent : 'transparent',
-                }}>
-                <Text
-                  style={{
-                    color: active ? t.accentText : t.text,
-                    fontWeight: '600',
-                  }}>
-                  {f.label}
-                </Text>
-              </Pressable>
-            );
-          })}
+          {FILTERS.map((f) => (
+            <Chip key={f.label} label={f.label} active={f.state === filter} onPress={() => setFilter(f.state)} />
+          ))}
         </View>
       )}
 
@@ -165,7 +141,7 @@ export default function VaultTimeline() {
           {timeline.hasNextPage ? (
             <Button
               title="Load older memories"
-              variant="secondary"
+              variant="ghost"
               onPress={() => void timeline.fetchNextPage()}
               loading={timeline.isFetchingNextPage}
             />
@@ -176,7 +152,7 @@ export default function VaultTimeline() {
       {isSealed && sealed.status !== 'ready' ? null : (
         <Button
           title="Export this vault"
-          variant="secondary"
+          variant="ghost"
           onPress={() => router.push({ pathname: '/vault/[id]/export', params: { id } })}
         />
       )}

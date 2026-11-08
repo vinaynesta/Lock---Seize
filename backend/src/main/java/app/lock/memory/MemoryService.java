@@ -38,6 +38,7 @@ public class MemoryService {
     static final String THOUGHT = "thought";
     static final String FEELING = "feeling";
     static final String LOCATION = "location";
+    static final String COORDINATES = "coordinates";
     static final String REFLECTION = "reflection";
 
     private static final Duration SAME_PERIOD_WINDOW = Duration.ofDays(30);
@@ -92,10 +93,15 @@ public class MemoryService {
      * sends {@code sealed} instead, encrypted on the device, and the plaintext fields must be null.
      */
     public record Content(String title, String thought, String feeling, String location, Instant occurredAt, Instant revealAt,
-                          SealedContent sealed) {
+                          SealedContent sealed, MemoryView.Coordinates coordinates) {
+
+        public Content(String title, String thought, String feeling, String location, Instant occurredAt, Instant revealAt,
+                       SealedContent sealed) {
+            this(title, thought, feeling, location, occurredAt, revealAt, sealed, null);
+        }
 
         public Content(String title, String thought, String feeling, String location, Instant occurredAt, Instant revealAt) {
-            this(title, thought, feeling, location, occurredAt, revealAt, null);
+            this(title, thought, feeling, location, occurredAt, revealAt, null, null);
         }
     }
 
@@ -104,10 +110,15 @@ public class MemoryService {
      * (AES-256-GCM, AAD = memoryId:field, base64). The server stores the bytes and never decrypts them.
      */
     public record SealedContent(int keyVersion, String title, String thought, String feeling, String location,
-                                List<String> searchTokens) {
+                                List<String> searchTokens, String coordinates) {
+
+        public SealedContent(int keyVersion, String title, String thought, String feeling, String location,
+                             List<String> searchTokens) {
+            this(keyVersion, title, thought, feeling, location, searchTokens, null);
+        }
 
         public SealedContent(int keyVersion, String title, String thought, String feeling, String location) {
-            this(keyVersion, title, thought, feeling, location, null);
+            this(keyVersion, title, thought, feeling, location, null, null);
         }
     }
 
@@ -219,6 +230,9 @@ public class MemoryService {
         if (c.title() == null || c.title().isBlank()) {
             throw ApiException.badRequest("VALIDATION_FAILED", "title: must not be blank");
         }
+        if (c.coordinates() != null && !c.coordinates().valid()) {
+            throw ApiException.badRequest("VALIDATION_FAILED", "coordinates: latitude must be -90..90 and longitude -180..180");
+        }
         // Drafts are (re-)encrypted under the current key, so a draft edited after a rotation moves to it.
         ContentCipher.WrappedKey key = access.currentKey();
         UUID id = memory.getId();
@@ -227,6 +241,7 @@ public class MemoryService {
                 cipher.encrypt(key, id, THOUGHT, c.thought()),
                 cipher.encrypt(key, id, FEELING, c.feeling()),
                 cipher.encrypt(key, id, LOCATION, c.location()),
+                cipher.encrypt(key, id, COORDINATES, c.coordinates() == null ? null : c.coordinates().format()),
                 c.occurredAt() != null ? c.occurredAt() : now,
                 c.revealAt(),
                 now);
@@ -234,7 +249,7 @@ public class MemoryService {
 
     /** Sealed vault (roadmap 3.6): stores device-encrypted fields as they are. */
     private void applySealedContent(Memory memory, VaultAccess access, Content c, Instant now) {
-        if (c.title() != null || c.thought() != null || c.feeling() != null || c.location() != null) {
+        if (c.title() != null || c.thought() != null || c.feeling() != null || c.location() != null || c.coordinates() != null) {
             throw ApiException.badRequest("PLAINTEXT_IN_SEALED_VAULT",
                     "A sealed vault never receives plaintext: encrypt every field on the device and send it under sealed");
         }
@@ -248,6 +263,7 @@ public class MemoryService {
                 app.lock.crypto.E2eFormats.content(e.thought(), "sealed.thought", 20_000, false),
                 app.lock.crypto.E2eFormats.content(e.feeling(), "sealed.feeling", 200, false),
                 app.lock.crypto.E2eFormats.content(e.location(), "sealed.location", 300, false),
+                app.lock.crypto.E2eFormats.content(e.coordinates(), "sealed.coordinates", 40, false),
                 c.occurredAt() != null ? c.occurredAt() : now,
                 c.revealAt(),
                 now);
@@ -480,7 +496,21 @@ public class MemoryService {
             throw ApiException.badRequest("NOT_A_SEALED_VAULT", "The server indexes this vault itself");
         }
         requireCreator(memory, userId);
-        searchIndex.indexBlind(memoryId, memory.getVaultId(), blindTokens(tokens, "tokens"));
+        List<byte[]> blind = blindTokens(tokens, "tokens");
+        searchIndex.indexBlind(memoryId, memory.getVaultId(), blind);
+        if (blind.isEmpty()) {
+            searchIndex.markEmpty(memoryId); // the device found no words: stop offering it for re-indexing
+        }
+    }
+
+    /** Sealed vault: ids of the caller's own memories still waiting for device-computed search tokens. */
+    @Transactional(readOnly = true)
+    public List<UUID> unindexedSealed(UUID vaultId, UUID userId, int limit) {
+        VaultAccess access = vaults.requireMember(vaultId, userId);
+        if (!access.isSealed()) {
+            throw ApiException.badRequest("NOT_A_SEALED_VAULT", "The server indexes this vault itself");
+        }
+        return searchIndex.unindexedSealed(vaultId, userId, now(), Math.max(1, Math.min(limit, 200)));
     }
 
     /** Backfill for memories written before 3.4: indexes one memory from its stored ciphertext. */
@@ -492,8 +522,7 @@ public class MemoryService {
         }
         VaultAccess access = vaults.systemAccess(m.getVaultId());
         if (access.isSealed()) {
-            searchIndex.markEmpty(memoryId); // nothing the server can index; stop the backfill retrying it
-            return;
+            return; // the server can't read it; devices index sealed memories (unindexedSealed)
         }
         ContentCipher.WrappedKey key = access.key(m.getKeyVersion());
         UUID id = m.getId();
@@ -804,8 +833,9 @@ public class MemoryService {
                     b64.encodeToString(m.getTitleCt()),
                     m.getThoughtCt() == null ? null : b64.encodeToString(m.getThoughtCt()),
                     m.getFeelingCt() == null ? null : b64.encodeToString(m.getFeelingCt()),
-                    m.getLocationCt() == null ? null : b64.encodeToString(m.getLocationCt()));
-            return new MemoryView(m.getId(), m.getVaultId(), m.getCreatedBy(), m.getState(), null, null, null, null,
+                    m.getLocationCt() == null ? null : b64.encodeToString(m.getLocationCt()),
+                    m.getCoordinatesCt() == null ? null : b64.encodeToString(m.getCoordinatesCt()));
+            return new MemoryView(m.getId(), m.getVaultId(), m.getCreatedBy(), m.getState(), null, null, null, null, null,
                     m.getOccurredAt(), m.getRevealAt(), sealed, m.getSealingUntil(), m.getLockedAt(), m.getContentHash(),
                     m.getCreatedAt(), sealed ? List.of() : assetViews, encrypted);
         }
@@ -816,6 +846,7 @@ public class MemoryService {
                 sealed ? null : cipher.decrypt(key, id, THOUGHT, m.getThoughtCt()),
                 sealed ? null : cipher.decrypt(key, id, FEELING, m.getFeelingCt()),
                 sealed ? null : cipher.decrypt(key, id, LOCATION, m.getLocationCt()),
+                sealed ? null : MemoryView.Coordinates.parse(cipher.decrypt(key, id, COORDINATES, m.getCoordinatesCt())),
                 m.getOccurredAt(), m.getRevealAt(), sealed, m.getSealingUntil(), m.getLockedAt(), m.getContentHash(),
                 m.getCreatedAt(), sealed ? List.of() : assetViews, null);
     }

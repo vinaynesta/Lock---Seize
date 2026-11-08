@@ -2,9 +2,11 @@ import '@/lib/cryptoRandom'; // must be first: secure randomness for @noble/* on
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 
 import { Loading } from '@/components/ui';
+import { sweepSealedCache } from '@/lib/sealedFiles';
 import { SessionProvider, useSession } from '@/lib/session';
 import { useTheme } from '@/theme';
 
@@ -12,6 +14,10 @@ export default function RootLayout() {
   const [queryClient] = useState(
     () => new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, retry: 1 } } }),
   );
+  // Plaintext left in the cache by a crash or a killed app (security review F4).
+  useEffect(() => {
+    if (Platform.OS !== 'web') sweepSealedCache();
+  }, []);
   return (
     <QueryClientProvider client={queryClient}>
       <SessionProvider>
@@ -33,7 +39,9 @@ function RootStack() {
       screenOptions={{
         headerStyle: { backgroundColor: t.background },
         headerTintColor: t.text,
+        headerTitleStyle: { fontSize: 17, fontWeight: '600' },
         headerShadowVisible: false,
+        headerBackButtonDisplayMode: 'minimal',
         contentStyle: { backgroundColor: t.background },
       }}>
       <Stack.Protected guard={!signedIn}>
@@ -46,10 +54,12 @@ function RootStack() {
       <Stack.Screen name="reset-password" options={{ title: 'Choose a new password' }} />
 
       <Stack.Protected guard={signedIn}>
-        <Stack.Screen name="index" options={{ title: 'Lock' }} />
+        <Stack.Screen name="index" options={{ title: '' }} />
         <Stack.Screen name="vault/new" options={{ title: 'New shared vault', presentation: 'modal' }} />
         <Stack.Screen name="vault/[id]/index" options={{ title: 'Vault' }} />
         <Stack.Screen name="vault/[id]/members" options={{ title: 'Members' }} />
+        <Stack.Screen name="vault/[id]/map" options={{ title: 'Map' }} />
+        <Stack.Screen name="map" options={{ title: 'All memories' }} />
         <Stack.Screen name="vault/[id]/compose" options={{ title: 'New memory', presentation: 'modal' }} />
         <Stack.Screen name="memory/[id]/index" options={{ title: 'Memory' }} />
         <Stack.Screen name="memory/[id]/edit" options={{ title: 'Edit draft', presentation: 'modal' }} />

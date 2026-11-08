@@ -58,18 +58,23 @@ public class IdentityService {
 
     @Transactional
     public Session login(String email, String password, String userAgent) {
-        String subject = "login:" + email.trim().toLowerCase();
-        attempts.checkNotLocked(subject);
+        return login(email, password, userAgent, null);
+    }
+
+    /** {@code clientIp}: failed passwords lock out that IP for this account, not the account itself. */
+    @Transactional
+    public Session login(String email, String password, String userAgent, String clientIp) {
+        attempts.checkLogin(email, clientIp);
         User user = users.findByEmailIgnoreCase(email.trim())
                 .filter(u -> u.getStatus() == User.Status.ACTIVE)
                 .filter(u -> passwordEncoder.matches(password, u.getPasswordHash()))
                 .orElse(null);
         if (user == null) {
             // Counted for unknown emails too, so the lockout does not reveal which accounts exist.
-            attempts.recordFailure(subject);
+            attempts.recordLoginFailure(email, clientIp);
             throw new ApiException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Invalid email or password");
         }
-        attempts.recordSuccess(subject);
+        attempts.recordLoginSuccess(email, clientIp);
         if (mfa.isEnabled(user.getId())) {
             // Right password, but no session until the second step (roadmap 3.1).
             return Session.mfaPending(mfaTickets.issue(user.getId()));

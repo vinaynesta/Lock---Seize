@@ -42,10 +42,12 @@ public class AuthController {
         return TokenResponse.of(identity.login(req.email(), req.password(), userAgent));
     }
 
+    /** {@code getRemoteAddr} honours X-Forwarded-For only when server.forward-headers-strategy is enabled. */
     @PostMapping("/login")
     public TokenResponse login(@Valid @RequestBody LoginRequest req,
-                               @RequestHeader(name = HttpHeaders.USER_AGENT, required = false) String userAgent) {
-        return TokenResponse.of(identity.login(req.email(), req.password(), userAgent));
+                               @RequestHeader(name = HttpHeaders.USER_AGENT, required = false) String userAgent,
+                               jakarta.servlet.http.HttpServletRequest request) {
+        return TokenResponse.of(identity.login(req.email(), req.password(), userAgent, request.getRemoteAddr()));
     }
 
     /** With two-step verification on, login returns only an {@code mfaToken}; send it here with a code. */

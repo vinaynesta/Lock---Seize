@@ -20,6 +20,17 @@ class ProductionSecretsGuardTest {
     }
 
     @Test
+    void refusesPerInstanceRateLimits() {
+        var real = props("cmVhbC1zZWNyZXQ=", "cmVhbC1rZXk=", "real-s3-secret");
+        var memory = new LockProperties(real.schedulingEnabled(), null, real.jwt(), real.crypto(), null, real.storage(),
+                new LockProperties.RateLimit(20, 5, 50, Duration.ofMinutes(15), "memory"),
+                real.scan(), null, null, real.email(), null, null, null, null);
+        assertThatThrownBy(new ProductionSecretsGuard(memory)::afterPropertiesSet)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("LOCK_RATE_LIMIT_STORE");
+    }
+
+    @Test
     void refusesTheDevMalwareScanner() {
         var real = props("cmVhbC1zZWNyZXQ=", "cmVhbC1rZXk=", "real-s3-secret");
         var devScan = new LockProperties(real.schedulingEnabled(), null, real.jwt(), real.crypto(), null, real.storage(), null,
@@ -40,7 +51,7 @@ class ProductionSecretsGuardTest {
         var props = props("cmVhbC1zZWNyZXQ=", ProductionSecretsGuard.DEV_MASTER_KEY, "real-s3-secret");
         var kms = new LockProperties(props.schedulingEnabled(), null, props.jwt(),
                 new LockProperties.Crypto("aws-kms", ProductionSecretsGuard.DEV_MASTER_KEY, null, "alias/lock", "us-east-1", null),
-                null, props.storage(), null, props.scan(), null, null, props.email(), null, null, null, null);
+                null, props.storage(), props.rateLimit(), props.scan(), null, null, props.email(), null, null, null, null);
         assertThatCode(new ProductionSecretsGuard(kms)::afterPropertiesSet).doesNotThrowAnyException();
     }
 
@@ -71,7 +82,7 @@ class ProductionSecretsGuardTest {
                 new LockProperties.Crypto("local", masterKey, null, null, null, null),
                 null,
                 new LockProperties.Storage("s3", "b", "e", "r", "a", s3Secret, true, Duration.ofMinutes(15), 1, 1, 1, 0),
-                null,
+                new LockProperties.RateLimit(20, 5, 50, Duration.ofMinutes(15), "postgres"),
                 new LockProperties.Scan("clamav", "clamd", 3310, Duration.ofMinutes(1)),
                 null,
                 null,

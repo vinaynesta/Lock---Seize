@@ -1,0 +1,80 @@
+{
+  "description": "Sealed Vault protocol test vectors. Spec: docs/sealed-vault-protocol.md. Byte strings are hex unless named *Base64. Randomness came from a seeded generator, so ciphertexts are reproducible; verify them by opening them with the keys below.",
+  "ids": {
+    "vaultId": "0b6d6c0e-5a8f-4c1e-9d2a-1f3e5b7c9a01",
+    "memoryId": "3c9e1f7a-2b4d-4e6f-8a1c-5d7e9f0b2c13",
+    "reflectionId": "6a2b4c8d-1e3f-4a5b-9c7d-0e2f4a6b8c25",
+    "assetId": "9d1e3f5a-7b2c-4d6e-8f0a-2c4e6a8b0d37",
+    "aliceId": "a11ce000-0000-4000-8000-000000000001",
+    "bobId": "b0b00000-0000-4000-8000-000000000002",
+    "requestId": "de71ce00-0000-4000-8000-000000000003"
+  },
+  "keys": {
+    "alice": {
+      "secretKey": "b34863790bfe2910e77c790e90132ceb21cc2e30eb3e3e804e4cc7636db53204",
+      "publicKey": "1f3295e01aef2100b5f5b566fddc10b1c26c250aaa887936a2ccabae57940763",
+      "fingerprint": "ba00 bb60 ea98 4171 20d7 84bd 2947 f88d"
+    },
+    "bob": {
+      "secretKey": "45a89528e19c296046e22ff2171f16b09f10328ef190df72dc4d814d7219a524",
+      "publicKey": "bd776c990a68e9576370e74c3d7af635e1be6767b6b94bc8d8d93253b5f32233",
+      "fingerprint": "81a3 6c25 0348 3c9b 8129 e190 8e9e e10c"
+    },
+    "newDevice": {
+      "secretKey": "3bdcb8e6ef3851de68f256defb79c946d2ac70b6c2ad22e09438601f2abfb65d",
+      "publicKey": "dd44f41673e9679af5b84ec7c1dc044d55b92316b7427f73fde1d1d53f4c575c"
+    },
+    "vaultKey": "52bf3dbf5e67dd0e63a6e94e605907cfb802d46457acff906e618ff1fd2f9e88",
+    "vaultKeyVersion": 3
+  },
+  "accountBundle": {
+    "passphrase": "maple river cloud tiger",
+    "recoveryPhrase": "absorb defense bench pole believe small fury young you original label never genuine behave narrow river right defense bomb grow immense pink unknown fox",
+    "passphraseKdf": {
+      "alg": "argon2id",
+      "salt": "a4o7rE1pHlYjV7mWQXp6uA==",
+      "m": 19456,
+      "t": 2,
+      "p": 1
+    },
+    "recoveryKdf": {
+      "alg": "hkdf-sha256",
+      "salt": "72zH5lr9TNyN+N15LzhkaQ=="
+    },
+    "wrappedByPassphrase": "014138eb279c2713340357bed129e515bad5ad86ce66c9c9f58beb1ef706c50922ee66388f8e9fef2ee400d10cd9dc9216da178d49210305293017feb2",
+    "wrappedByRecovery": "01d8a0d333caae877e0ef14a7390164ae146e9901b1b0dbea0d5dd9eba898a37aa297e4f2e51441a609f721fa23b4474cd9ce226e6031cd7c4e0e578a1"
+  },
+  "vaultKeyWrapV2": "026ca0c8f5f33f45aa17bd68258febe482a9701babf461ace69306b7a9adb118733ae8dae3627e4ccfa7fc8d90ae9f5827a6835c8fe3ef62e4fadd8d7005a1189d0e4a259b7634956fb2023066d60d0a7c4c381fc59e6b4c20d2df4adf",
+  "vaultKeyWrapV1": "019afd7e7890c8238806e31f3590e7a77116f909e7a6e83c0174ca19020663e329a0b4397ab15b749e023c30473f0493c4f19222fedb5fa28cc1434e1f0231a39dfb30e0950342b02ed8d5ec78cdf8e97383ba59c824a1f349cbb96324",
+  "contentTitle": {
+    "plaintext": "The night the power went out",
+    "ciphertext": "269d7874fd581a62b78a303c7bde2a609efee136caed027f999bb00fa63b979a2f434dd6a29fe20d358fa79a65996a54502e77d2d9d7790d"
+  },
+  "reflectionV2": {
+    "plaintext": "Still makes me smile",
+    "authorId": "b0b00000-0000-4000-8000-000000000002",
+    "ciphertext": "183403a7a13e69c6f5fbc730438c2f9880cbedfc12dccbc0bc661f622082fac546429734b5279a6a8a5c7283ba6774f8"
+  },
+  "mediaSmall": {
+    "plaintext": "hello sealed media",
+    "ciphertext": "4c4b4d3102cc6f3f952b79c12b12445c9e334dde693b80ead53f587da49f3b747bd6bbaf52374e0ac3baea53242656376ceb"
+  },
+  "mediaTwoChunks": {
+    "plaintext": "bytes i % 251 for i in 0..(1 MiB + 10)",
+    "header": "4c4b4d310244373cd7d34e430c9c8251",
+    "length": 1048634,
+    "sha256": "8b8031468d4363082f41f21f4ae24b4973f31b5d652d33237424426e773c9d4a"
+  },
+  "searchTokens": {
+    "text": "Café by the lake",
+    "tokensBase64": [
+      "21wpVAVZYbOw5ApS9cQFJQ==",
+      "9fPzIV8IIccDeuUpjWUv4w==",
+      "Jyeq00m1QgQBATMhGGgCEg==",
+      "PyWAuxQLdZple+k4wHvhqA==",
+      "pxn2F5u3jZbhn7JQ19GH8A==",
+      "sobrmgrpZEQ42Pxe0l76sQ=="
+    ]
+  },
+  "deviceApprovalWrap": "01dcdecc8dbe8e1a147da331ca2841b3bda825a796e06d4be489cdff46b8aa9c674f93860ee25b8a3bab783314718a9f4e8811fe24f2d4e8ce92002f0f957ff62715e370b5d2ccf8cdae9789614289ed96e86d349d65ddb5992809340f"
+}

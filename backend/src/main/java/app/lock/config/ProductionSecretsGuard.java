@@ -49,6 +49,10 @@ class ProductionSecretsGuard implements InitializingBean {
         if (props.email() == null || props.email().provider() == null || "log".equals(props.email().provider())) {
             problems.add("LOCK_EMAIL_PROVIDER");
         }
+        // In-memory counters are per instance: N instances would give an attacker N times every limit.
+        if (props.rateLimit() == null || !"postgres".equals(props.rateLimit().store())) {
+            problems.add("LOCK_RATE_LIMIT_STORE");
+        }
         if (!problems.isEmpty()) {
             throw new IllegalStateException("Refusing to start with dev-default secrets in the prod profile. Set: "
                     + String.join(", ", problems.stream().sorted().toList()));

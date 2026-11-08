@@ -111,7 +111,7 @@ public class PasswordResetService {
         tokens.invalidateAll(user.getId(), now);
         refreshTokens.revokeAll(user.getId());
         // Whoever was guessing the old password has nothing left to guess; let the owner straight in.
-        attempts.recordSuccess("login:" + user.getEmail());
+        attempts.clearLogin(user.getEmail());
         attempts.recordSuccess("reauth:" + user.getId());
         audit.record(AuditEventType.PASSWORD_RESET, user.getId(), null, null);
         outbox.publish("user", user.getId(), RESET_COMPLETED, Map.of());

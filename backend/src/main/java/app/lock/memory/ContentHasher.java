@@ -41,6 +41,12 @@ final class ContentHasher {
                         field(d, Long.toString(a.getSizeBytes()));
                         field(d, a.getChecksumSha256());
                     });
+            // Roadmap 5.1: only when present, labelled, after everything else, so every hash computed
+            // before coordinates existed stays valid.
+            if (m.getCoordinatesCt() != null) {
+                field(d, "coordinates");
+                field(d, m.getCoordinatesCt());
+            }
             return HexFormat.of().formatHex(d.digest());
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);

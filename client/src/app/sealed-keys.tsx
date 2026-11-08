@@ -10,7 +10,7 @@ import { MfaCodeField } from '@/components/MfaCodeField';
 import { QrCode } from '@/components/QrCode';
 import { collect, startRequest } from '@/lib/deviceApproval';
 import { Body, Button, Card, ErrorText, Field, Label, Loading, Screen } from '@/components/ui';
-import { generateRecoveryPhrase, isValidRecoveryPhrase } from '@/lib/sealed';
+import { fingerprint, fromBase64, generateRecoveryPhrase, isValidRecoveryPhrase } from '@/lib/sealed';
 import {
   adoptApprovedKeys,
   changePassphrase,
@@ -20,9 +20,56 @@ import {
   unlockWithPassphraseOnDevice,
 } from '@/lib/sealedVault';
 import { useKeyBundle, useKeysVersion } from '@/lib/useSealed';
-import { space, useTheme } from '@/theme';
+import { passphraseStrength } from '@/lib/passphraseStrength';
+import { mono, space, useTheme } from '@/theme';
 
 const MIN_PASSPHRASE = 12;
+
+/**
+ * Copies the recovery phrase and clears the clipboard a minute later if it still holds it, so the
+ * words don't sit in clipboard history or reach other apps indefinitely (security review F8).
+ */
+async function copyPhraseBriefly(phrase: string) {
+  await Clipboard.setStringAsync(phrase);
+  setTimeout(() => {
+    void Clipboard.getStringAsync().then((now) => (now === phrase ? Clipboard.setStringAsync('') : undefined));
+  }, 60_000);
+}
+
+/** The account's name and email, which a passphrase must not lean on. */
+function personal(me?: { displayName: string; email: string }): string[] {
+  if (!me) return [];
+  return [me.displayName, ...me.displayName.split(/\s+/), me.email, me.email.split('@')[0]];
+}
+
+function strongEnough(passphrase: string, me?: { displayName: string; email: string }): boolean {
+  return passphrase.length >= MIN_PASSPHRASE && passphraseStrength(passphrase, personal(me)).acceptable;
+}
+
+/** Live strength meter under a new passphrase (security review F9). */
+function StrengthMeter({ passphrase }: { passphrase: string }) {
+  const t = useTheme();
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me });
+  if (!passphrase) return null;
+  const s = passphraseStrength(passphrase, personal(me.data));
+  const color = s.level === 'strong' ? t.locked : s.level === 'fair' ? t.sealing : t.danger;
+  const label = s.level === 'strong' ? 'Strong' : s.level === 'fair' ? 'Good enough' : 'Too easy to guess';
+  return (
+    <View style={{ gap: space.xs }}>
+      <View
+        accessibilityRole="progressbar"
+        accessibilityLabel={`Passphrase strength: ${label}`}
+        accessibilityValue={{ min: 0, max: 100, now: Math.min(100, s.bits) }}
+        style={{ height: 4, borderRadius: 2, backgroundColor: t.surfaceMuted, overflow: 'hidden' }}>
+        <View style={{ height: '100%', width: `${Math.min(100, (s.bits / 90) * 100)}%`, backgroundColor: color }} />
+      </View>
+      <Body style={{ fontSize: 13, color }}>
+        {label}
+        {s.hint ? <Body muted style={{ fontSize: 13 }}>{` · ${s.hint}`}</Body> : null}
+      </Body>
+    </View>
+  );
+}
 
 /** Three word positions (one from each third of the phrase) to confirm it was written down. */
 function pickCheckPositions(): number[] {
@@ -49,11 +96,13 @@ export default function SealedKeys() {
   return (
     <Screen>
       <Card>
-        <Body style={{ fontWeight: '600' }}>{deviceUnlocked() ? '🔓 Unlocked on this device' : '🔒 Locked on this device'}</Body>
+        <Body style={{ fontWeight: '600' }}>{deviceUnlocked() ? 'Unlocked on this device' : 'Locked on this device'}</Body>
         <Body muted>Key fingerprint</Body>
-        <Body style={{ fontFamily: 'monospace', fontSize: 13 }}>{bundle.data.fingerprint}</Body>
+        {/* Computed here from the public key, not taken from the server's text (security review F1). */}
+        <Body selectable style={{ fontFamily: mono, fontSize: 13 }}>{fingerprint(fromBase64(bundle.data.publicKey))}</Body>
         <Body muted style={{ fontSize: 13 }}>
-          Members of a sealed vault can compare fingerprints to be sure nobody swapped a key.
+          Compare it in person with what other members see next to your name under a sealed vault’s Members, to be
+          sure nobody swapped a key.
         </Body>
       </Card>
       {deviceUnlocked() ? (
@@ -70,6 +119,7 @@ export default function SealedKeys() {
 
 function SetUp() {
   const t = useTheme();
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   const queryClient = useQueryClient();
   // Generated once per visit (lazy state initialisers run a single time).
   const [phrase] = useState(generateRecoveryPhrase);
@@ -103,7 +153,7 @@ function SetUp() {
         <Card>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: space.sm }}>
             {words.map((w, i) => (
-              <Text key={i} style={{ color: t.text, fontFamily: 'monospace', width: '30%' }}>
+              <Text key={i} style={{ color: t.text, fontFamily: mono, width: '30%' }}>
                 {i + 1}. {w}
               </Text>
             ))}
@@ -113,7 +163,7 @@ function SetUp() {
           Write these 24 words on paper and keep them somewhere safe. They are the only way back in if you forget your
           passphrase on every device. Lock will never show them again.
         </Body>
-        <Button title="Copy" variant="secondary" onPress={() => void Clipboard.setStringAsync(phrase)} />
+        <Button title="Copy (clears in 1 minute)" variant="secondary" onPress={() => void copyPhraseBriefly(phrase)} />
         <Button title="I wrote it down" onPress={() => setStep('confirm')} />
       </Screen>
     );
@@ -134,6 +184,7 @@ function SetUp() {
         onChangeText={setPassphrase}
         secureTextEntry
       />
+      <StrengthMeter passphrase={passphrase} />
       <Body muted style={{ fontSize: 13 }}>
         Different from your account password. You’ll enter it once on each new device.
       </Body>
@@ -147,15 +198,16 @@ function SetUp() {
         title="Create my keys"
         onPress={() => create.mutate()}
         loading={create.isPending}
-        disabled={!checkOk || passphrase.length < MIN_PASSPHRASE || repeat !== passphrase || !password}
+        disabled={!checkOk || !strongEnough(passphrase, me.data) || repeat !== passphrase || !password}
       />
-      <Button title="Show the phrase again" variant="secondary" onPress={() => setStep('phrase')} />
+      <Button title="Show the phrase again" variant="ghost" onPress={() => setStep('phrase')} />
     </Screen>
   );
 }
 
 function Unlock() {
   const queryClient = useQueryClient();
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   const [mode, setMode] = useState<'passphrase' | 'recover' | 'device'>('passphrase');
   const [passphrase, setPassphrase] = useState('');
   const [phrase, setPhrase] = useState('');
@@ -176,8 +228,8 @@ function Unlock() {
         <ErrorText error={unlock.error} />
         <Button title="Unlock" onPress={() => unlock.mutate()} loading={unlock.isPending} disabled={!passphrase} />
         <Body muted style={{ fontSize: 13 }}>Unlocking takes a few seconds: the passphrase is deliberately slow to guess.</Body>
-        <Button title="Use another device instead" variant="secondary" onPress={() => setMode('device')} />
-        <Button title="I forgot my passphrase" variant="secondary" onPress={() => setMode('recover')} />
+        <Button title="Use another device instead" variant="ghost" onPress={() => setMode('device')} />
+        <Button title="I forgot my passphrase" variant="ghost" onPress={() => setMode('recover')} />
       </View>
     );
   }
@@ -191,6 +243,7 @@ function Unlock() {
         onChangeText={setNewPassphrase}
         secureTextEntry
       />
+      <StrengthMeter passphrase={newPassphrase} />
       <Field label="Account password" value={password} onChangeText={setPassword} secureTextEntry />
       <MfaCodeField value={mfaCode} onChangeText={setMfaCode} />
       <ErrorText error={recover.error} />
@@ -198,9 +251,9 @@ function Unlock() {
         title="Recover"
         onPress={() => recover.mutate()}
         loading={recover.isPending}
-        disabled={!isValidRecoveryPhrase(phrase) || newPassphrase.length < MIN_PASSPHRASE || !password}
+        disabled={!isValidRecoveryPhrase(phrase) || !strongEnough(newPassphrase, me.data) || !password}
       />
-      <Button title="Back" variant="secondary" onPress={() => setMode('passphrase')} />
+      <Button title="Back" variant="ghost" onPress={() => setMode('passphrase')} />
     </View>
   );
 }
@@ -235,7 +288,7 @@ function ApproveFromOtherDevice({ onDone, onBack }: { onDone: () => void; onBack
       {request.data ? (
         <>
           <QrCode value={request.data.qr} />
-          <Body muted style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 12 }}>{request.data.fingerprint}</Body>
+          <Body muted style={{ textAlign: 'center', fontFamily: mono, fontSize: 12 }}>{request.data.fingerprint}</Body>
           <Body muted style={{ textAlign: 'center' }}>Waiting for approval… The code expires in 10 minutes.</Body>
         </>
       ) : (
@@ -255,6 +308,7 @@ function ApproveFromOtherDevice({ onDone, onBack }: { onDone: () => void; onBack
 }
 
 function ChangePassphrase() {
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   const [next, setNext] = useState('');
   const [password, setPassword] = useState('');
   const [mfaCode, setMfaCode] = useState('');
@@ -264,6 +318,7 @@ function ChangePassphrase() {
       <Label>Change passphrase</Label>
       <Body muted>Your keys and recovery phrase stay the same.</Body>
       <Field label={`New passphrase (at least ${MIN_PASSPHRASE} characters)`} value={next} onChangeText={setNext} secureTextEntry />
+      <StrengthMeter passphrase={next} />
       <Field label="Account password" value={password} onChangeText={setPassword} secureTextEntry />
       <MfaCodeField value={mfaCode} onChangeText={setMfaCode} />
       <ErrorText error={change.error} />
@@ -273,7 +328,7 @@ function ChangePassphrase() {
         variant="secondary"
         onPress={() => change.mutate()}
         loading={change.isPending}
-        disabled={next.length < MIN_PASSPHRASE || !password}
+        disabled={!strongEnough(next, me.data) || !password}
       />
     </View>
   );

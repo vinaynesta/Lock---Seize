@@ -16,7 +16,9 @@ import {
   unlockWithPassphrase,
   unlockWithRecoveryPhrase,
   unwrapVaultKey,
+  unwrapVaultKeyAuth,
   wrapVaultKey,
+  wrapVaultKeyAuth,
 } from '../sealed';
 
 // The jest-expo environment hides Node's Web Crypto; the app gets randomness from expo-crypto instead.
@@ -98,5 +100,40 @@ describe('sealed vault crypto', () => {
     const fp = fingerprint(new Uint8Array(32));
     // SHA-256 of 32 zero bytes starts 66687aadf862bd776c8fc18b8e9f8e20
     expect(fp).toBe('6668 7aad f862 bd77 6c8f c18b 8e9f 8e20');
+  });
+
+  test('a bundle with Argon2 parameters outside the server range is refused, not run (review I1)', async () => {
+    const { bundle } = await createBundle('correct horse battery', generateRecoveryPhrase());
+    const huge = { ...bundle, passphraseKdf: { ...bundle.passphraseKdf, m: 4_000_000 } };
+    await expect(unlockWithPassphrase(huge, 'correct horse battery')).rejects.toThrow(SealedError);
+    const weak = { ...bundle, passphraseKdf: { ...bundle.passphraseKdf, t: 1 } };
+    await expect(unlockWithPassphrase(weak, 'correct horse battery')).rejects.toThrow(SealedError);
+  });
+
+  test('authenticated wraps open only for the right recipient and the claimed sender (review F2)', () => {
+    const ana = generateKeyPair();
+    const bo = generateKeyPair();
+    const server = generateKeyPair(); // what a compromised server controls
+    const vaultKey = generateVaultKey();
+    const wrapped = wrapVaultKeyAuth(vaultKey, bo.publicKey, 'vault-1', 2, 'bo', { userId: 'ana', pair: ana });
+    expect(wrapped).toHaveLength(93);
+    expect(wrapped[0]).toBe(2);
+    const fromAna = { userId: 'ana', publicKey: ana.publicKey };
+    expect(toBase64(unwrapVaultKeyAuth(wrapped, bo, 'vault-1', 2, 'bo', fromAna))).toBe(toBase64(vaultKey));
+
+    // The server plants a key it chose, wrapped to Bo's real public key and claiming Ana sent it: refused.
+    const planted = wrapVaultKeyAuth(generateVaultKey(), bo.publicKey, 'vault-1', 2, 'bo', { userId: 'ana', pair: server });
+    expect(() => unwrapVaultKeyAuth(planted, bo, 'vault-1', 2, 'bo', fromAna)).toThrow(SealedError);
+    // Relabelling the sender, recipient, vault or version fails too.
+    expect(() => unwrapVaultKeyAuth(wrapped, bo, 'vault-1', 2, 'bo', { userId: 'cy', publicKey: ana.publicKey })).toThrow(SealedError);
+    expect(() => unwrapVaultKeyAuth(wrapped, bo, 'vault-2', 2, 'bo', fromAna)).toThrow(SealedError);
+    expect(() => unwrapVaultKeyAuth(wrapped, bo, 'vault-1', 3, 'bo', fromAna)).toThrow(SealedError);
+    expect(() => unwrapVaultKeyAuth(wrapped, ana, 'vault-1', 2, 'bo', fromAna)).toThrow(SealedError);
+    // A legacy anonymous wrap is not accepted where an authenticated one is expected.
+    const legacy = wrapVaultKey(vaultKey, bo.publicKey, 'vault-1', 2, 'bo');
+    expect(() => unwrapVaultKeyAuth(legacy, bo, 'vault-1', 2, 'bo', fromAna)).toThrow(SealedError);
+    // Wrapping for yourself works with your own key as the sender.
+    const self = wrapVaultKeyAuth(vaultKey, ana.publicKey, 'vault-1', 2, 'ana', { userId: 'ana', pair: ana });
+    expect(toBase64(unwrapVaultKeyAuth(self, ana, 'vault-1', 2, 'ana', fromAna))).toBe(toBase64(vaultKey));
   });
 });

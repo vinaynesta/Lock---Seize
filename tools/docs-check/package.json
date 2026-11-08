@@ -1,0 +1,13 @@
+{
+  "name": "lock-docs-check",
+  "private": true,
+  "description": "CI check: every Mermaid diagram in docs/ must parse (GitHub renders a broken one as an error box).",
+  "type": "module",
+  "scripts": {
+    "check": "node check-mermaid.mjs ../../docs"
+  },
+  "devDependencies": {
+    "jsdom": "25.0.1",
+    "mermaid": "11.4.1"
+  }
+}

@@ -45,7 +45,9 @@ backend/            Spring Boot 4 API (Java 21), modular monolith
     audit/          append-only audit trail
     outbox/         transactional outbox + dispatcher (queue seam)
   src/main/resources/db/migration/   Flyway schema + immutability triggers
-docs/               architecture (as built), original design, decisions, roadmap, sealed-vault design
+docs/               architecture (as built), original design, decisions, roadmap, sealed-vault design,
+                    protocol spec + test vectors, security review, device test checklist
+tools/docs-check/   CI check that every Mermaid diagram in docs/ parses
 deploy/             production env template, clamd.conf, S3 lifecycle (+ apply script), Prometheus alerts
 docker-compose.yml  Postgres + MinIO for local development
 ```
@@ -86,7 +88,11 @@ must be listed in `LOCK_CORS_ORIGINS` (defaults cover `localhost:8081` and `loca
 ```bash
 cd backend && ./mvnw test                       # API
 cd client && npx tsc --noEmit && npx expo lint && npx jest  # client
+cd tools/docs-check && npm ci && npm run check               # docs: every Mermaid diagram parses
 ```
+
+CI runs all three (`backend`, `client`, `docs` jobs). Things only a phone can show (maps, camera, GPS,
+playback, big files) are covered by the manual [`docs/device-test-checklist.md`](docs/device-test-checklist.md).
 
 The tests run against a real embedded PostgreSQL (no Docker), so the database immutability
 triggers are tested too, not mocked. A few tests use real external tools and skip when they are
@@ -110,7 +116,7 @@ For a production deployment, start from `deploy/production.env.example` and the 
 | Two-step verification: status, set up, confirm (returns recovery codes), new codes, turn off | `GET /account/mfa`, `POST /account/mfa/setup`, `/confirm`, `/recovery-codes`, `/disable` |
 | Storage used against the plan's quota | `GET /account/storage` |
 | Push: register / remove this device; notification preferences | `POST /devices`, `DELETE /devices`, `GET`/`PATCH /notification-preferences` |
-| Create a draft memory | `POST /vaults/{vaultId}/memories` (optional `Idempotency-Key` header) |
+| Create a draft memory | `POST /vaults/{vaultId}/memories` (optional `Idempotency-Key` header). Optional `coordinates: {latitude, longitude}` pins it on the vault's map; stored encrypted, frozen once locked |
 | Edit the draft | `PATCH /memories/{id}` |
 | Attach media | `POST /memories/{id}/assets/upload` → `PUT` bytes to the returned URL → `POST /assets/{assetId}/complete` (→ `PENDING_SCAN`, then `VERIFIED` once the malware scan passes, or `REJECTED`) |
 | Show media | `GET /assets/{assetId}/download?variant=thumb\|preview\|playback` (falls back to the original when the rendition doesn't exist) |
@@ -128,10 +134,12 @@ For a production deployment, start from `deploy/production.env.example` and the 
 | Delete the account (re-auth, 30-day delay, Policy C) | `POST /account/deletion-request` / `GET` / `DELETE` to cancel |
 | Shared vaults | `POST /vaults`, `POST /vaults/{id}/members`, `POST /invitations/{vaultId}/accept`, `POST /vaults/{id}/leave` |
 | Sealed Vault keys (E2E, roadmap 3.6): create with the account password, read, new passphrase | `POST /account/key-bundle`, `GET /account/key-bundle`, `PUT /account/key-bundle/passphrase` |
-| Sealed vault: create with `"encryption":"SEALED"`; read wrapped keys / add them for members | `POST /vaults`, `GET /vaults/{id}/keys`, `POST /vaults/{id}/keys/{version}` |
-| Sealed vault content: send `id` + `sealed` (device-encrypted fields, optional `searchTokens`) instead of plaintext; reflections send `id`, `keyVersion`, `sealedBody` | `POST /vaults/{vaultId}/memories`, `PATCH /memories/{id}`, `POST /memories/{id}/reflections` |
+| Sealed vault: create with `"encryption":"SEALED"`; read wrapped keys / add them for members. New copies must use the authenticated version-2 wrap (`400 LEGACY_KEY_FORMAT` otherwise); each copy comes back with `wrappedBy` and `wrappedByPublicKey` | `POST /vaults`, `GET /vaults/{id}/keys`, `POST /vaults/{id}/keys/{version}` |
+| Sealed media: the device may choose the asset id it encrypted for (optional `id` in the upload request; sealed vaults only). Repeating the same unfinished upload (same memory, size, checksum, type) returns a fresh URL; any other reuse is `409 ASSET_EXISTS` | `POST /memories/{id}/assets/upload` |
+| Sealed vault content: send `id` + `sealed` (device-encrypted fields incl. optional `coordinates`, optional `searchTokens`) instead of plaintext; reflections send `id`, `keyVersion`, `sealedBody` | `POST /vaults/{vaultId}/memories`, `PATCH /memories/{id}`, `POST /memories/{id}/reflections` |
 | Sealed media: the usual upload flow with device-encrypted bytes (no scan); then the device-made encrypted thumbnail | `POST /assets/{assetId}/sealed-thumbnail` → `PUT` → `POST /assets/{assetId}/sealed-thumbnail/complete` |
 | Sealed search: per query word, blind tokens computed on the device; the creator can re-send a memory's tokens | `POST /vaults/{vaultId}/search`, `PUT /memories/{id}/search-tokens` |
+| Sealed re-index: the caller's own memories that have no device tokens yet (written before on-device search) | `GET /vaults/{vaultId}/search/unindexed?limit=` |
 | Approve a new device for Sealed Vault keys (QR): request, list, approve, collect once, cancel | `POST /account/device-approvals`, `GET`, `POST /{id}/approve`, `POST /{id}/collect`, `DELETE /{id}` |
 
 There is deliberately no `DELETE /memories/{id}` for locked memories.
@@ -160,6 +168,8 @@ with `413 QUOTA_EXCEEDED`.
 | `LOCK_MANAGEMENT_PORT` | — | Serve `/actuator/metrics` and `/actuator/prometheus` on this private port (they are refused on the app port). Alert rules: `deploy/prometheus/lock-alerts.yml` |
 | `LOCK_LOG_FORMAT` | plain text | `ecs` or `logstash` for one JSON object per log line |
 | `LOCK_FORWARD_HEADERS` | `none` | Set to `framework` behind a load balancer so rate limits see the real client IP |
+| `GOOGLE_MAPS_ANDROID_API_KEY` (client build) | — | Google Maps key for the memory map on Android (`client/app.config.ts`; never commit it). Restrict it to the Maps SDK for Android, package `app.lock.client` and the signing SHA-1. iOS uses Apple Maps and needs no key. |
+| `LOCK_RATE_LIMIT_STORE` | `memory` | `postgres` shares rate limits and login lockouts across every API instance (table `rate_limit_hits`). **Required in production**; the `prod` profile refuses `memory`. |
 | `LOCK_EMAIL_PROVIDER` | `log` | `postmark` (set `LOCK_POSTMARK_TOKEN`, `LOCK_EMAIL_FROM`) or `log` (dev: nothing is sent). **Set in production.** |
 | `LOCK_RESET_URL` | `http://localhost:8081/reset-password` | Client page that takes `?token=` from the password-reset email |
 | `LOCK_PUSH_PROVIDER`, `LOCK_EXPO_ACCESS_TOKEN` | `log`, — | `expo` sends push notifications through Expo; `log` only logs titles |

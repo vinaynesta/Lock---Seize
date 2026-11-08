@@ -4,6 +4,8 @@ import { Platform } from 'react-native';
 import type { Tokens } from '@/api/client';
 
 const KEY = 'lock.session';
+/** Not synced to other devices or restored from backups onto them (security review I5). */
+const OPTIONS: SecureStore.SecureStoreOptions = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
 
 /**
  * Session token persistence (access + refresh token). Keychain/Keystore on device. SecureStore is
@@ -12,7 +14,7 @@ const KEY = 'lock.session';
 export const tokenStore = {
   async get(): Promise<Tokens | null> {
     const raw =
-      Platform.OS === 'web' ? (globalThis.sessionStorage?.getItem(KEY) ?? null) : await SecureStore.getItemAsync(KEY);
+      Platform.OS === 'web' ? (globalThis.sessionStorage?.getItem(KEY) ?? null) : await SecureStore.getItemAsync(KEY, OPTIONS);
     if (!raw) return null;
     try {
       const parsed = JSON.parse(raw) as Partial<Tokens>;
@@ -30,7 +32,7 @@ export const tokenStore = {
       globalThis.sessionStorage?.setItem(KEY, raw);
       return;
     }
-    await SecureStore.setItemAsync(KEY, raw);
+    await SecureStore.setItemAsync(KEY, raw, OPTIONS);
   },
 
   async clear(): Promise<void> {
@@ -38,6 +40,6 @@ export const tokenStore = {
       globalThis.sessionStorage?.removeItem(KEY);
       return;
     }
-    await SecureStore.deleteItemAsync(KEY);
+    await SecureStore.deleteItemAsync(KEY, OPTIONS);
   },
 };

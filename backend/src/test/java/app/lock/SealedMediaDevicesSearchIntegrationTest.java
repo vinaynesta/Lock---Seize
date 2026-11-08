@@ -221,6 +221,66 @@ class SealedMediaDevicesSearchIntegrationTest extends IntegrationTest {
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("NOT_A_SEALED_VAULT"));
     }
 
+    @Test
+    void devicesReindexTheirOwnOlderMemories_untilEachHasTokensOrIsMarkedEmpty() throws Exception {
+        TestUser lea = withBundle("Lea");
+        TestUser max = withBundle("Max");
+        String vault = readyVault(lea);
+        invite(lea, vault, max);
+        mvc.perform(json(post("/vaults/" + vault + "/keys/1"), keysJson(max)).with(lea.auth())).andExpect(status().isOk());
+        String older = sealedMemory(lea, vault);   // written before 3.6f: no tokens
+        String empty = sealedMemory(lea, vault);   // no words at all
+        UUID indexed = UUID.randomUUID();
+        createWithTokens(lea, vault, indexed, List.of(token()));
+        sealedMemory(max, vault);                  // someone else's: not Lea's to index
+
+        assertThat(unindexed(lea, vault)).containsExactlyInAnyOrder(older, empty);
+        mvc.perform(json(put("/memories/" + older + "/search-tokens"), tokensJson(List.of(token()))).with(lea.auth()))
+                .andExpect(status().isNoContent());
+        mvc.perform(json(put("/memories/" + empty + "/search-tokens"), tokensJson(List.of())).with(lea.auth()))
+                .andExpect(status().isNoContent());
+        assertThat(unindexed(lea, vault)).isEmpty();
+        assertThat(unindexed(max, vault)).hasSize(1);
+
+        // Server vaults index themselves; non-members get 404.
+        mvc.perform(get("/vaults/" + personalVault(lea) + "/search/unindexed").with(lea.auth()))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("NOT_A_SEALED_VAULT"));
+        TestUser out = withBundle("Out");
+        mvc.perform(get("/vaults/" + vault + "/search/unindexed").with(out.auth())).andExpect(status().isNotFound());
+    }
+
+    private List<String> unindexed(TestUser user, String vault) throws Exception {
+        String body = mvc.perform(get("/vaults/" + vault + "/search/unindexed").with(user.auth()))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        return com.jayway.jsonpath.JsonPath.read(body, "$[*]");
+    }
+
+    @Test
+    void sealedUploadsMayChooseTheirAssetId_serverVaultsMayNot() throws Exception {
+        TestUser pam = withBundle("Pam");
+        String vault = readyVault(pam);
+        String memory = sealedMemory(pam, vault);
+        UUID assetId = UUID.randomUUID();
+        // Security review F6: the device binds the file key to the asset id, so it picks the id first.
+        String body = uploadJson("image/jpeg", 2048).replace("{", "{\"id\":\"" + assetId + "\",");
+        mvc.perform(json(post("/memories/" + memory + "/assets/upload"), body).with(pam.auth()))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.assetId").value(assetId.toString()));
+        // Retrying the same unfinished upload (queued offline) gets a fresh URL for the same asset...
+        mvc.perform(json(post("/memories/" + memory + "/assets/upload"), body).with(pam.auth()))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.assetId").value(assetId.toString()));
+        // ...but a different file can't take an existing id.
+        mvc.perform(json(post("/memories/" + memory + "/assets/upload"), uploadJson("image/jpeg", 4096)
+                        .replace("{", "{\"id\":\"" + assetId + "\",")).with(pam.auth()))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("ASSET_EXISTS"));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM memory_assets WHERE id = ?::uuid", Integer.class,
+                assetId.toString())).isEqualTo(1);
+
+        String plain = createMemory(pam, personalVault(pam), "Plain");
+        mvc.perform(json(post("/memories/" + plain + "/assets/upload"),
+                        uploadJson("image/jpeg", 2048).replace("{", "{\"id\":\"" + UUID.randomUUID() + "\",")).with(pam.auth()))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("NOT_A_SEALED_VAULT"));
+    }
+
     // ---- Helpers ------------------------------------------------------------------------------------
 
     private List<String> searchIds(TestUser user, String vault, List<List<String>> words) throws Exception {
@@ -315,7 +375,7 @@ class SealedMediaDevicesSearchIntegrationTest extends IntegrationTest {
         List<String> parts = new ArrayList<>();
         for (TestUser r : recipients) {
             byte[] wrapped = random(93);
-            wrapped[0] = 1;
+            wrapped[0] = 2; // version-2 (authenticated) wrap
             parts.add("\"" + r.id() + "\":\"" + B64.encodeToString(wrapped) + "\"");
         }
         return "{\"keys\":{" + String.join(",", parts) + "}}";

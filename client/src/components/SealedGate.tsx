@@ -21,7 +21,7 @@ export function SealedGate({ state }: { state: SealedState }) {
   }
   return (
     <Card>
-      <Body style={{ fontWeight: '600' }}>🔒 End-to-end encrypted</Body>
+      <Body style={{ fontWeight: '600' }}>End-to-end encrypted</Body>
       <Body muted>
         {state.status === 'no-bundle'
           ? 'Set up your Sealed Vault keys to read and write here.'

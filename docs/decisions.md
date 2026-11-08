@@ -124,6 +124,20 @@ swap later.
     already shares the vault with. Such assets are marked `encryption_metadata = 'e2e:v1'`, become usable
     as soon as size and checksum match, and never reach clamd or the server-side media worker. Their
     thumbnail is made and encrypted on the device.
+26. **Login lockout is per account and IP, with an account-wide backstop** (roadmap 1.2 follow-up, decided
+    2026-11-08). Locking a whole account after 5 wrong passwords let anyone lock out a known email. Now
+    5 wrong passwords lock out only the IP they came from for that account (15 minutes), and 50 from all
+    IPs together still stop a botnet. Re-authentication and MFA codes stay per account: they need a valid
+    session already. CAPTCHA was not added. Counters are shared through Postgres in production
+    (`LOCK_RATE_LIMIT_STORE=postgres`) rather than Redis, so no new infrastructure is needed.
+
+27. **Memory map positions are captured on the device and stored encrypted** (roadmap 5.1, decided
+    2026-11-08). A memory may carry coordinates from the phone's GPS or from looking up its "Where" text
+    with the phone's geocoder, only when the user asks. They are a content field: encrypted like the
+    others (on the device in sealed vaults), part of the integrity hash when present, frozen once locked.
+    Locked memories without a pin can be placed on the map at view time by looking up their "Where" text
+    (an opt-in switch, never stored). Maps: `expo-maps` (Apple Maps on iOS 17+, Google Maps on Android
+    with a build-time key); web shows the same memories as a list.
 
 ## Still open
 
@@ -132,6 +146,6 @@ swap later.
   open: Sealed Vault pricing (`sealed-vault-design.md` §6.4).
 - ~~Vault-key rotation on member removal~~ Done (15).
 - ~~Media processing workers~~ Done: thumbnails, malware scanning, transcoding and HEIC/WebP (16, 17).
-- ~~MFA~~ Done (20). (Rate limiting is done, in memory per instance, see roadmap 1.2. Refresh tokens are done: 15-minute access tokens plus rotating 30-day refresh tokens with reuse detection; see `docs/roadmap.md` 1.1.)
+- ~~MFA~~ Done (20). (Rate limiting is done and shared across instances through Postgres, see roadmap 1.2 and decision 26. Refresh tokens are done: 15-minute access tokens plus rotating 30-day refresh tokens with reuse detection; see `docs/roadmap.md` 1.1.)
 - ~~Storage limits per plan, cold-tier archival~~ Done (22, 23). Billing (how a user changes plan) is not built.
 - ~~Scheduler locking~~ Done: jobs claim work with `FOR UPDATE SKIP LOCKED` (roadmap 1.3).

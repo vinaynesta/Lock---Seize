@@ -1,15 +1,34 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, router, Stack } from 'expo-router';
-import { Pressable, Text, View } from 'react-native';
+import { router, Stack } from 'expo-router';
+import { View } from 'react-native';
 
 import { api } from '@/api/lock';
 import { MemoryCard } from '@/components/MemoryCard';
-import { Body, Button, Card, ErrorText, Label, Loading, Screen } from '@/components/ui';
-import { space, useTheme } from '@/theme';
+import {
+  Body,
+  Button,
+  Card,
+  Empty,
+  ErrorText,
+  Group,
+  Loading,
+  Monogram,
+  Row,
+  Screen,
+  Section,
+  TextLink,
+  Title,
+} from '@/components/ui';
+import { space } from '@/theme';
+
+function greeting(): string {
+  const h = new Date().getHours();
+  return h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+}
 
 export default function Home() {
-  const t = useTheme();
   const queryClient = useQueryClient();
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   const vaults = useQuery({ queryKey: ['vaults'], queryFn: api.vaults });
   const invitations = useQuery({ queryKey: ['invitations'], queryFn: api.invitations });
   const onThisDay = useQuery({ queryKey: ['on-this-day'], queryFn: api.onThisDay });
@@ -22,34 +41,34 @@ export default function Home() {
     },
   });
 
+  const firstName = me.data?.displayName.split(' ')[0];
+
   return (
     <Screen>
-      <Stack.Screen
-        options={{
-          headerRight: () => (
-            <Link href="/settings" asChild>
-              <Pressable accessibilityLabel="Settings" hitSlop={12}>
-                <Text style={{ color: t.accent, fontSize: 16 }}>Settings</Text>
-              </Pressable>
-            </Link>
-          ),
-        }}
-      />
+      <Stack.Screen options={{ headerRight: () => <TextLink title="Settings" onPress={() => router.push('/settings')} /> }} />
+
+      <View style={{ gap: space.md }}>
+        <Title subtitle="Some memories deserve to be permanent.">
+          {greeting()}
+          {firstName ? `, ${firstName}` : ''}
+        </Title>
+        <View style={{ alignSelf: 'flex-start' }}>
+          <TextLink title="📍 Map of all memories" onPress={() => router.push('/map')} />
+        </View>
+      </View>
 
       {onThisDay.data && onThisDay.data.length > 0 ? (
-        <View style={{ gap: space.sm }}>
-          <Label>On this day</Label>
+        <Section title="On this day">
           {onThisDay.data.map((m) => (
             <MemoryCard key={m.id} memory={m} />
           ))}
-        </View>
+        </Section>
       ) : null}
 
       {invitations.data && invitations.data.length > 0 ? (
-        <View style={{ gap: space.sm }}>
-          <Label>Invitations</Label>
+        <Section title="Invitations">
           {invitations.data.map((inv) => (
-            <Card key={inv.vaultId}>
+            <Card key={inv.vaultId} style={{ gap: space.lg }}>
               <Body>You’ve been invited to a shared vault.</Body>
               <View style={{ flexDirection: 'row', gap: space.sm }}>
                 <View style={{ flex: 1 }}>
@@ -66,26 +85,33 @@ export default function Home() {
             </Card>
           ))}
           <ErrorText error={respond.error} />
-        </View>
+        </Section>
       ) : null}
 
-      <View style={{ gap: space.sm }}>
-        <Label>Your vaults</Label>
+      <Section title="Your vaults" action={<TextLink title="+ New" onPress={() => router.push('/vault/new')} />}>
         {vaults.isPending ? <Loading /> : null}
         <ErrorText error={vaults.error} />
-        {vaults.data?.map((v) => (
-          <Card key={v.id} onPress={() => router.push({ pathname: '/vault/[id]', params: { id: v.id } })}>
-            <Body style={{ fontSize: 18, fontWeight: '600' }}>{v.name}</Body>
-            <Body muted>
-              {v.type === 'PERSONAL' ? 'Private · only you' : 'Shared'}
-              {v.encryption === 'SEALED' ? ' · 🔒 Sealed' : ''}
-              {v.state === 'DORMANT' ? ' · dormant' : ''}
-            </Body>
-          </Card>
-        ))}
-      </View>
-
-      <Button title="New shared vault" variant="secondary" onPress={() => router.push('/vault/new')} />
+        {vaults.data && vaults.data.length === 0 ? <Empty title="No vaults yet" /> : null}
+        {vaults.data && vaults.data.length > 0 ? (
+          <Group>
+            {vaults.data.map((v) => (
+              <Row
+                key={v.id}
+                title={v.name}
+                subtitle={[
+                  v.type === 'PERSONAL' ? 'Private' : 'Shared',
+                  v.encryption === 'SEALED' ? 'End-to-end encrypted' : null,
+                  v.state === 'DORMANT' ? 'Dormant' : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+                leading={<Monogram text={v.name} tint={v.type === 'PERSONAL'} />}
+                onPress={() => router.push({ pathname: '/vault/[id]', params: { id: v.id } })}
+              />
+            ))}
+          </Group>
+        ) : null}
+      </Section>
     </Screen>
   );
 }

@@ -41,7 +41,9 @@ public class SealedVaultKeyController {
     /** {@code keys}: recipient user id → base64 wrapped key. */
     public record AddKeysRequest(@NotEmpty Map<UUID, String> keys) {}
 
-    public record WrappedKeyResponse(int keyVersion, String wrappedKey, UUID wrappedBy, Instant createdAt) {}
+    /** {@code wrappedByPublicKey}: the wrapping member's public key when the copy was stored (null on version-1 copies). */
+    public record WrappedKeyResponse(int keyVersion, String wrappedKey, UUID wrappedBy, String wrappedByPublicKey,
+                                     Instant createdAt) {}
 
     public record MemberKeyResponse(UUID userId, String publicKey, String fingerprint) {}
 
@@ -51,7 +53,8 @@ public class SealedVaultKeyController {
             Base64.Encoder b64 = Base64.getEncoder();
             return new KeyStateResponse(s.vaultId(), s.currentVersion(),
                     s.myKeys().stream().map(k -> new WrappedKeyResponse(k.getKeyVersion(), b64.encodeToString(k.getWrappedKey()),
-                            k.getWrappedBy(), k.getCreatedAt())).toList(),
+                            k.getWrappedBy(), k.getWrappedByPublicKey() == null ? null : b64.encodeToString(k.getWrappedByPublicKey()),
+                            k.getCreatedAt())).toList(),
                     s.members().stream().map(m -> new MemberKeyResponse(m.userId(), b64.encodeToString(m.publicKey()), m.fingerprint())).toList(),
                     s.missingCurrent());
         }

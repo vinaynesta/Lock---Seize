@@ -16,10 +16,11 @@ export function usePendingSync(): QueueItem[] {
 export function PendingSync({ vaultId }: { vaultId?: string }) {
   const t = useTheme();
   const all = usePendingSync();
-  const items = vaultId ? all.filter((i) => i.kind === 'upload' || i.vaultId === vaultId) : all;
+  const items = vaultId ? all.filter((i) => i.kind === 'upload' || i.kind === 'uploadSealed' || i.vaultId === vaultId) : all;
   if (items.length === 0) return null;
-  const drafts = items.filter((i) => i.kind === 'createDraft' && !isFailed(i)).length;
-  const uploads = items.filter((i) => i.kind === 'upload' && !isFailed(i)).length;
+  const isUpload = (i: QueueItem) => i.kind === 'upload' || i.kind === 'uploadSealed';
+  const drafts = items.filter((i) => !isUpload(i) && !isFailed(i)).length;
+  const uploads = items.filter((i) => isUpload(i) && !isFailed(i)).length;
   const failed = items.filter(isFailed);
   return (
     <Card>
@@ -34,7 +35,7 @@ export function PendingSync({ vaultId }: { vaultId?: string }) {
       {failed.map((f) => (
         <View key={f.localId} style={{ gap: space.xs }}>
           <Body style={{ color: t.danger, fontSize: 14 }}>
-            {f.kind === 'createDraft' ? `Draft “${f.input.title}”` : 'A file'} couldn’t be synced: {f.lastError}
+            {f.kind === 'createDraft' ? `Draft “${f.input.title}”` : f.kind === 'createSealedDraft' ? 'An encrypted draft' : 'A file'} couldn’t be synced: {f.lastError}
           </Body>
           <Button title="Remove from this device" variant="secondary" onPress={() => void discard(f.localId)} />
         </View>

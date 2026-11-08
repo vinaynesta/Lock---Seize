@@ -1,10 +1,10 @@
-import { Link } from 'expo-router';
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ApiError } from '@/api/client';
-import { Body, Button, ErrorText, Field, Title } from '@/components/ui';
+import { Button, ErrorText, Field, LockMark, TextLink, Title } from '@/components/ui';
 import { useSession } from '@/lib/session';
 import { space, useTheme } from '@/theme';
 
@@ -42,9 +42,11 @@ export default function SignIn() {
   if (mfaToken) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: t.background, justifyContent: 'center' }}>
-        <View style={{ padding: space.xl, gap: space.lg, maxWidth: 480, width: '100%', alignSelf: 'center' }}>
-          <Title>Two-step verification</Title>
-          <Body muted>Enter the 6-digit code from your authenticator app, or one of your recovery codes.</Body>
+        <View style={{ padding: space.xl, gap: space.lg, maxWidth: 420, width: '100%', alignSelf: 'center' }}>
+          <LockMark size={48} />
+          <Title subtitle="Enter the 6-digit code from your authenticator app, or one of your recovery codes.">
+            Two-step verification
+          </Title>
           <Field
             label="Code"
             value={code}
@@ -59,7 +61,7 @@ export default function SignIn() {
           <Button title="Verify" onPress={submit} loading={busy} disabled={code.trim().length < 6} />
           <Button
             title="Back"
-            variant="secondary"
+            variant="ghost"
             onPress={() => {
               setMfaToken(null);
               setCode('');
@@ -73,10 +75,10 @@ export default function SignIn() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.background, justifyContent: 'center' }}>
-      <View style={{ padding: space.xl, gap: space.lg, maxWidth: 480, width: '100%', alignSelf: 'center' }}>
-        <View style={{ gap: space.xs, marginBottom: space.lg }}>
-          <Title>Lock</Title>
-          <Body muted>Some memories deserve to be permanent.</Body>
+      <View style={{ padding: space.xl, gap: space.lg, maxWidth: 420, width: '100%', alignSelf: 'center' }}>
+        <View style={{ gap: space.xl, marginBottom: space.md }}>
+          <LockMark />
+          <Title subtitle="Some memories deserve to be permanent.">Welcome back</Title>
         </View>
         <Field
           label="Email"
@@ -98,12 +100,10 @@ export default function SignIn() {
         />
         <ErrorText error={error} />
         <Button title="Sign in" onPress={submit} loading={busy} disabled={!email || !password} />
-        <Link href="/sign-up" style={{ color: t.accent, textAlign: 'center', fontSize: 16 }}>
-          New here? Create an account
-        </Link>
-        <Link href="/forgot-password" style={{ color: t.textMuted, textAlign: 'center', fontSize: 15 }}>
-          Forgot your password?
-        </Link>
+        <Button title="Create an account" variant="secondary" onPress={() => router.push('/sign-up')} />
+        <View style={{ alignItems: 'center', paddingTop: space.sm }}>
+          <TextLink title="Forgot your password?" muted onPress={() => router.push('/forgot-password')} />
+        </View>
       </View>
     </SafeAreaView>
   );
